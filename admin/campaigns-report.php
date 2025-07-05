@@ -1,5 +1,5 @@
 <?php
-// File: /admin/campaigns-report.php (FINAL & FIXED - Uses LEFT JOIN for all traffic)
+// File: /admin/campaigns-report.php (DEFINITIVE FINAL - Complete, Optimized, with All Fixes)
 
 require_once __DIR__ . '/init.php';
 
@@ -17,26 +17,10 @@ $selected_format_id = filter_input(INPUT_GET, 'ad_format_id', FILTER_VALIDATE_IN
 $campaigns_list = $conn->query("SELECT id, name FROM campaigns WHERE id > 0 ORDER BY name ASC");
 $ad_formats_list = $conn->query("SELECT id, name FROM ad_formats WHERE status = 1 ORDER BY name ASC");
 
+
 // --- Main Hybrid Query Construction ---
 $allowed_group_by = ['daily'=>'stat_date', 'country'=>'country', 'browser'=>'browser', 'os'=>'os', 'device'=>'device'];
 $group_by_field_db = $allowed_group_by[$group_by] ?? null;
-
-// Tentukan alias dan header kolom utama
-$main_column_header = "Campaign";
-$show_campaign_col = false;
-$select_clause = "COALESCE(c.name, 'External RTB') as group_field, T.campaign_id";
-$group_by_clause_outer = "GROUP BY T.campaign_id, group_field";
-
-if ($group_by_field_db) {
-    $select_clause = "T.{$group_by_field_db} as group_field, COALESCE(c.name, 'External RTB') as campaign_name, T.campaign_id";
-    $group_by_clause_outer = "GROUP BY group_field, T.campaign_id, campaign_name";
-    $main_column_header = ucfirst(str_replace('_', ' ', $group_by));
-    $show_campaign_col = true;
-    if ($group_by === 'daily') {
-        $group_by_clause_outer = "GROUP BY group_field";
-        $show_campaign_col = false;
-    }
-}
 
 // Tentukan rentang tanggal untuk query historis
 $date_hist_from = ($date_from < $today) ? $date_from : '1970-01-01';
@@ -56,6 +40,24 @@ $subquery_sql = "
         WHERE stat_date = ? AND stat_date >= ?
     )
 ";
+
+// Bangun query utama
+$select_clause = "COALESCE(c.name, 'External RTB') as group_field, T.campaign_id";
+$group_by_clause_outer = "GROUP BY T.campaign_id, group_field";
+$main_column_header = "Campaign";
+$show_campaign_col = false;
+
+if ($group_by_field_db) {
+    $select_clause = "T.{$group_by_field_db} as group_field, COALESCE(c.name, 'External RTB') as campaign_name, T.campaign_id";
+    $group_by_clause_outer = "GROUP BY group_field, T.campaign_id, campaign_name";
+    $main_column_header = ucfirst(str_replace('_', ' ', $group_by));
+    $show_campaign_col = true;
+    if ($group_by === 'daily') {
+        $group_by_clause_outer = "GROUP BY group_field";
+        $show_campaign_col = false;
+    }
+}
+
 
 $sql = "
     SELECT 
@@ -77,7 +79,7 @@ if ($selected_campaign_id) {
     $types .= "i";
 }
 if ($selected_format_id) {
-    $where_clauses[] = "(c.ad_format_id = ? OR T.campaign_id = -1)";
+    $where_clauses[] = "(c.ad_format_id = ?)";
     $params[] = $selected_format_id;
     $types .= "i";
 }
@@ -122,7 +124,7 @@ require_once __DIR__ . '/templates/header.php';
     <div class="card-body">
         <div class="alert alert-info small"><i class="bi bi-info-circle-fill"></i> Note: Reports use summarized data for performance. Today's data is real-time.</div>
         <form method="GET" class="row g-3 align-items-end mt-2">
-            <div class="col-lg-3 col-md-6"><label class="form-label">Campaign</label><select class="form-select" name="campaign_id"><option value="">All Campaigns</option><?php if($campaigns_list) { mysqli_data_seek($campaigns_list, 0); while($campaign = $campaigns_list->fetch_assoc()): ?><option value="<?php echo $campaign['id']; ?>" <?php if($selected_campaign_id == $campaign['id']) echo 'selected'; ?>><?php echo htmlspecialchars($campaign['name']); ?></option><?php endwhile; } ?></select></div>
+            <div class="col-lg-3 col-md-6"><label class="form-label">Campaign</label><select class="form-select" name="campaign_id"><option value="">All Campaigns & RTB</option><?php if($campaigns_list) { mysqli_data_seek($campaigns_list, 0); while($campaign = $campaigns_list->fetch_assoc()): ?><option value="<?php echo $campaign['id']; ?>" <?php if($selected_campaign_id == $campaign['id']) echo 'selected'; ?>><?php echo htmlspecialchars($campaign['name']); ?></option><?php endwhile; } ?></select></div>
             <div class="col-lg-2 col-md-6"><label class="form-label">Ad Format</label><select class="form-select" name="ad_format_id"><option value="">All Formats</option><?php if($ad_formats_list) { mysqli_data_seek($ad_formats_list, 0); while($format = $ad_formats_list->fetch_assoc()): ?><option value="<?php echo $format['id']; ?>" <?php if($selected_format_id == $format['id']) echo 'selected'; ?>><?php echo htmlspecialchars($format['name']); ?></option><?php endwhile; } ?></select></div>
             <div class="col-lg-2 col-md-6"><label class="form-label">Group By</label><select class="form-select" name="group_by"><option value="summary" <?php if($group_by == 'summary') echo 'selected'; ?>>Summary</option><option value="daily" <?php if($group_by == 'daily') echo 'selected'; ?>>Daily</option><option value="country" <?php if($group_by == 'country') echo 'selected'; ?>>Country</option><option value="browser" <?php if($group_by == 'browser') echo 'selected'; ?>>Browser</option><option value="os" <?php if($group_by == 'os') echo 'selected'; ?>>OS</option><option value="device" <?php if($group_by == 'device') echo 'selected'; ?>>Device</option></select></div>
             <div class="col-lg-3 col-md-6"><label class="form-label">Date Range</label><div class="input-group"><input type="date" class="form-control" name="date_from" value="<?php echo htmlspecialchars($date_from); ?>"><input type="date" class="form-control" name="date_to" value="<?php echo htmlspecialchars($date_to); ?>"></div></div>
@@ -185,7 +187,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (chartData.impressions && chartData.impressions.length > 0) {
             new Chart(ctx, { 
                 type: 'line', 
-                data: { datasets: [{ label: 'Impressions', data: chartData.impressions, borderColor: 'rgba(54, 162, 235, 1)', tension: 0.1, yAxisID: 'y' }, { label: 'Clicks', data: chartData.clicks, borderColor: 'rgba(255, 99, 132, 1)', tension: 0.1, yAxisID: 'y1' }] }, 
+                data: {
+                    datasets: [
+                        { label: 'Impressions', data: chartData.impressions, borderColor: 'rgba(54, 162, 235, 1)', tension: 0.1, yAxisID: 'y' }, 
+                        { label: 'Clicks', data: chartData.clicks, borderColor: 'rgba(255, 99, 132, 1)', tension: 0.1, yAxisID: 'y1' }
+                    ]
+                }, 
                 options: { 
                     responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, 
                     scales: { 
