@@ -1,0 +1,127 @@
+/* File: /publisher/assets/css/style.css (NEW) */
+
+/* Import Font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: #f8f9fa;
+    color: #212529;
+}
+
+.wrapper {
+    display: flex;
+    width: 100%;
+    align-items: stretch;
+}
+
+/* --- Sidebar Styling --- */
+.sidebar {
+    width: 260px;
+    background: #fff;
+    color: #343a40;
+    min-height: 100vh;
+    transition: margin-left 0.35s ease-in-out;
+    border-right: 1px solid #dee2e6;
+    z-index: 100;
+}
+
+.sidebar-header {
+    padding: 1.25rem;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.sidebar-brand {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #212529;
+    text-decoration: none;
+}
+
+.sidebar-body {
+    padding: 1rem;
+}
+
+.sidebar-nav {
+    padding-left: 0;
+    list-style: none;
+}
+
+.sidebar-item {
+    margin-bottom: 0.25rem;
+}
+
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    color: #495057;
+    text-decoration: none;
+    border-radius: 0.375rem;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    font-weight: 500;
+}
+
+.sidebar-link i {
+    margin-right: 0.85rem;
+    font-size: 1.2rem;
+    width: 20px;
+    text-align: center;
+}
+
+.sidebar-link:hover {
+    background-color: #e9ecef;
+    color: #0d6efd;
+}
+
+.sidebar-link.active {
+    background-color: #0d6efd;
+    color: #fff;
+}
+
+
+/* --- Main Content Styling --- */
+.main-content {
+    flex-grow: 1;
+    width: calc(100% - 260px);
+    transition: margin-left 0.35s ease-in-out;
+    margin-left: 0;
+}
+
+.top-header {
+    background: #fff;
+    border-bottom: 1px solid #dee2e6;
+    padding: 0.75rem 1.5rem;
+    height: 65px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.content {
+    padding: 1.5rem;
+}
+
+/* --- Collapsed State --- */
+.sidebar.collapsed {
+    margin-left: -260px;
+}
+.main-content.collapsed {
+    width: 100%;
+}
+
+@media (max-width: 991.98px) {
+    .sidebar {
+        margin-left: -260px;
+        position: fixed;
+        height: 100%;
+    }
+    .main-content {
+        width: 100%;
+    }
+    .sidebar.collapsed {
+        margin-left: 0;
+    }
+}
