@@ -10,6 +10,7 @@ if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
     if (is_fraudulent_request($conn)) {
         // Jika terdeteksi fraud, hentikan eksekusi dengan senyap.
         http_response_code(204); // 204 No Content
+        $conn->close();
         exit();
     }
 }
@@ -102,7 +103,7 @@ $request_body_json = json_encode($mock_bid_request);
 
 // --- 3. Panggil rtb-handler.php Secara Internal ---
 $rtb_handler_domain = get_setting('rtb_handler_domain', $conn);
-$rtb_handler_url = "{$rtb_handler_domain}/rtb-handler.php?key={$zone_info['supply_key']}";
+$rtb_handler_url = "{$rtb_handler_domain}/rtb-handler.php?key={$zone_info['supply_key']}&internal_call=1";
 
 $ch = curl_init($rtb_handler_url);
 curl_setopt_array($ch, [
