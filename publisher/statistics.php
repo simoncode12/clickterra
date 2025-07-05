@@ -11,10 +11,10 @@ if (!$publisher_id) {
     die("Akses tidak sah: Publisher ID tidak ditemukan.");
 }
 
-// Default ke 7 hari terakhir dari data yang tersedia (sampai kemarin)
-// Menggunakan 'yesterday' untuk memastikan data sudah final dan ringkasan sudah dibuat
+// Default ke 7 hari terakhir dari data yang tersedia (termasuk hari ini)
+// Menggunakan hari ini untuk memberikan statistik yang lebih akurat dan up-to-date
 $date_from = $_GET['date_from'] ?? date('Y-m-d', strtotime('-7 days'));
-$date_to = $_GET['date_to'] ?? date('Y-m-d', strtotime('-1 day'));
+$date_to = $_GET['date_to'] ?? date('Y-m-d');
 
 $group_by = $_GET['group_by'] ?? 'date';
 $filter_site_id = filter_input(INPUT_GET, 'site_id', FILTER_VALIDATE_INT);
@@ -32,44 +32,67 @@ if ($filter_site_id) {
     $zones_list = get_query_results($conn, "SELECT z.id, z.name FROM zones z JOIN sites s ON z.site_id = s.id WHERE z.site_id = ? AND s.user_id = ?", [$filter_site_id, $publisher_id], "ii");
 }
 
-// --- 2. MAIN OPTIMIZED QUERY DARI stats_daily_summary ---
+// --- 2. HYBRID QUERY: GABUNGKAN DATA HISTORIS DAN REALTIME ---
+$today = date('Y-m-d');
+$yesterday = date('Y-m-d', strtotime('-1 day'));
+
+// Tentukan rentang tanggal untuk query historis dan realtime
+$date_hist_from = ($date_from < $today) ? $date_from : $today;
+$date_hist_to = ($date_to < $today) ? $date_to : $yesterday;
+
 $group_by_select = "T.stat_date as group_field";
 $group_by_clause = "GROUP BY T.stat_date";
 $main_column_header = "Date";
 $join_clause = "LEFT JOIN zones z ON T.zone_id = z.id LEFT JOIN sites si ON z.site_id = si.id";
+$group_by_select_inner = ", stat_date";
 
 switch ($group_by) {
     case 'site':
         $group_by_select = "si.url as group_field";
         $group_by_clause = "GROUP BY si.id, si.url"; // Group by ID juga untuk memastikan keunikan jika ada URL yang sama
         $main_column_header = "Site";
+        $group_by_select_inner = ", zone_id";
         break;
     case 'zone':
         // Pastikan format group_field sesuai dengan kebutuhan Anda
         $group_by_select = "CONCAT(z.name, ' (', z.size, ')') as group_field";
         $group_by_clause = "GROUP BY z.id, z.name, z.size"; // Group by ID juga
         $main_column_header = "Zone";
+        $group_by_select_inner = ", zone_id";
         break;
     case 'country':
         $group_by_select = "T.country as group_field";
         $group_by_clause = "GROUP BY T.country";
         $main_column_header = "Country";
+        $group_by_select_inner = ", country";
         break;
 }
 
+// Query hybrid yang menggabungkan data historis dari stats_daily_summary
+// dengan data realtime dari campaign_stats untuk hari ini
 $sql = "
     SELECT
         {$group_by_select},
-        SUM(T.impressions) AS total_impressions,
-        SUM(T.clicks) AS total_clicks,
-        SUM(T.publisher_payout) AS total_earnings
-    FROM stats_daily_summary AS T
+        SUM(T.total_impressions) AS total_impressions,
+        SUM(T.total_clicks) AS total_clicks,
+        SUM(T.total_earnings) AS total_earnings
+    FROM (
+        SELECT zone_id, impressions AS total_impressions, clicks AS total_clicks, publisher_payout AS total_earnings {$group_by_select_inner}
+        FROM stats_daily_summary
+        WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT zone_id, impressions AS total_impressions, clicks AS total_clicks, (cost * ? / 100) AS total_earnings {$group_by_select_inner}
+        FROM campaign_stats
+        WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
     {$join_clause}
 ";
 
-$params = [$date_from, $date_to, $publisher_id];
-$types = "ssi";
-$where_clauses = ["T.stat_date BETWEEN ? AND ?", "si.user_id = ?"];
+$params = [$date_hist_from, $date_hist_to, $revenue_share, $today, $date_from];
+$types = "ssdss";
+$where_clauses = ["si.user_id = ?"];
+$params[] = $publisher_id;
+$types .= "i";
 
 if ($filter_site_id) {
     $where_clauses[] = "si.id = ?";
@@ -127,7 +150,18 @@ require_once __DIR__ . '/templates/header.php';
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 
 <h1 class="mt-4 mb-4">Detailed Statistics</h1>
-<div class="alert alert-info small">Note: All reports are based on summarized data up to yesterday for maximum performance.</div>
+<?php
+$today = date('Y-m-d');
+$includes_today = ($date_to >= $today);
+?>
+<?php if ($includes_today): ?>
+<div class="alert alert-warning small">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    <strong>Note:</strong> Statistics for today (<?php echo date('j M Y'); ?>) are provisional and may change as data is updated in real-time. Historical data has been aggregated and is final.
+</div>
+<?php else: ?>
+<div class="alert alert-info small">Note: All reports are based on summarized historical data for maximum performance.</div>
+<?php endif; ?>
 
 <div class="row mb-4">
     <div class="col-lg-3 col-md-6 mb-4"><div class="card shadow-sm"><div class="card-body text-center"><div class="text-muted small text-uppercase">Impressions</div><h4 class="fw-bold mb-0"><?php echo number_format($totals['impressions']); ?></h4></div></div></div>
