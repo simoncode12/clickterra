@@ -3,19 +3,15 @@
 
 require_once __DIR__ . '/config/database.php';
 
-// --- LANGKAH 1: PEMERIKSAAN ANTI-FRAUD ---
-// "Penjaga" ini ditempatkan di paling atas untuk memblokir traffic buruk secepat mungkin.
+// --- LANGKAH 1: PEMERIKSAAN ANTI-FRAUD & HELPERS ---
 if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
     require_once __DIR__ . '/includes/fraud_detector.php';
     if (is_fraudulent_request($conn)) {
-        // Jika terdeteksi fraud, hentikan eksekusi dengan senyap.
-        http_response_code(204); // 204 No Content
+        http_response_code(204); // Blokir dengan senyap
         $conn->close();
         exit();
     }
 }
-
-// Muat helper lain setelah lolos dari pemeriksaan fraud
 if (file_exists(__DIR__ . '/includes/settings.php')) {
     require_once __DIR__ . '/includes/settings.php';
 }
@@ -27,11 +23,9 @@ if (!function_exists('get_setting')) {
     }
 }
 
-
 // --- Headers ---
 header('Content-Type: application/javascript');
 header('Access-Control-Allow-Origin: *');
-
 
 // --- Fungsi untuk keluar dengan senyap ---
 function exit_silently($message = "Ad serving failed") {
@@ -39,7 +33,6 @@ function exit_silently($message = "Ad serving failed") {
     echo "/* " . htmlspecialchars($message) . " */";
     exit();
 }
-
 
 // --- 1. Validasi Input & Dapatkan Info Zona ---
 $zone_id = filter_input(INPUT_GET, 'zone_id', FILTER_VALIDATE_INT);
@@ -90,7 +83,7 @@ $mock_bid_request = [
     ],
     'device' => [
         'ua' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? ''
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? '' // IP akan dideteksi ulang oleh rtb-handler
     ],
     'user' => [
         'id' => md5(($_SERVER['REMOTE_ADDR'] ?? '') . ($_SERVER['HTTP_USER_AGENT'] ?? ''))
@@ -100,9 +93,9 @@ $mock_bid_request = [
 ];
 $request_body_json = json_encode($mock_bid_request);
 
-
 // --- 3. Panggil rtb-handler.php Secara Internal ---
-$rtb_handler_domain = get_setting('rtb_handler_domain', $conn);
+$rtb_handler_domain = get_setting('ad_server_domain', $conn);
+// Tambahkan parameter internal_call=1 untuk melewati fraud check di rtb-handler
 $rtb_handler_url = "{$rtb_handler_domain}/rtb-handler.php?key={$zone_info['supply_key']}&internal_call=1";
 
 $ch = curl_init($rtb_handler_url);
@@ -111,12 +104,11 @@ curl_setopt_array($ch, [
     CURLOPT_POSTFIELDS => $request_body_json,
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-    CURLOPT_TIMEOUT => 1 // 1 second timeout
+    CURLOPT_TIMEOUT => 1
 ]);
 $response_json = curl_exec($ch);
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
-
 
 // --- 4. Proses Respon dan Sajikan Iklan ---
 if ($http_code === 200 && !empty($response_json)) {
@@ -129,7 +121,6 @@ if ($http_code === 200 && !empty($response_json)) {
         exit_silently("Auction won but Ad Markup was empty.");
     }
 } else {
-    // Jika tidak ada bid (204) atau terjadi error
     exit_silently("No ad available from auction (HTTP: {$http_code}).");
 }
 
