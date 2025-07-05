@@ -1,7 +1,7 @@
 <?php
-// File: /scripts/aggregate_realtime.php (FINAL & COMPLETE)
-// This script should be run every 5 minutes via a cron job.
-// It only aggregates data for THE CURRENT DAY.
+// File: /scripts/aggregate_stats.php (FINAL & COMPLETE)
+// This script should be run ONCE DAILY via a cron job (e.g., at 1:05 AM).
+// It aggregates yesterday's data as a failsafe and prunes old raw data.
 
 // Pastikan skrip ini hanya bisa dijalankan dari command-line (CLI), bukan dari browser.
 if (php_sapi_name() !== 'cli') {
@@ -10,12 +10,16 @@ if (php_sapi_name() !== 'cli') {
 
 require_once __DIR__ . '/../config/database.php';
 
-$today = date('Y-m-d');
-echo "Starting real-time aggregation for today ({$today}) at " . date('H:i:s') . "\n";
+echo "==================================================\n";
+echo "Starting Daily Maintenance Script: " . date('Y-m-d H:i:s') . "\n";
+echo "==================================================\n\n";
 
-// Query ini mengambil semua data mentah dari HARI INI,
+// 1. Agregasi Data dari Kemarin
+$yesterday = date('Y-m-d', strtotime('-1 day'));
+echo "Aggregating data for date: {$yesterday}...\n";
+
+// Query ini mengambil semua data mentah dari hari kemarin,
 // meringkasnya, dan memasukkannya ke tabel summary.
-// ON DUPLICATE KEY UPDATE akan mengganti data ringkasan yang ada dengan data baru yang lebih lengkap.
 $aggregation_sql = "
     INSERT INTO stats_daily_summary 
         (stat_date, campaign_id, creative_id, zone_id, ssp_partner_id, country, os, browser, device, impressions, clicks, cost, publisher_payout)
@@ -49,19 +53,48 @@ $aggregation_sql = "
 
 $stmt_agg = $conn->prepare($aggregation_sql);
 if ($stmt_agg === false) {
-    die("Error preparing real-time aggregation statement: " . $conn->error . "\n");
+    die("Error preparing aggregation statement: " . $conn->error . "\n");
 }
 
-$stmt_agg->bind_param("s", $today);
+$stmt_agg->bind_param("s", $yesterday);
 
 if ($stmt_agg->execute()) {
-    echo "Successfully aggregated/updated " . $stmt_agg->affected_rows . " real-time rows.\n";
+    echo "Successfully aggregated " . $stmt_agg->affected_rows . " summary rows.\n";
 } else {
-    echo "Error during real-time aggregation: " . $stmt_agg->error . "\n";
+    echo "Error during aggregation: " . $stmt_agg->error . "\n";
+}
+$stmt_agg->close();
+
+
+// 2. Pembersihan (Pruning) Data Lama
+$prune_date = date('Y-m-d', strtotime('-30 days'));
+echo "\nPruning raw data older than {$prune_date}...\n";
+
+// Membersihkan campaign_stats
+if ($conn->query("DELETE FROM campaign_stats WHERE stat_date < '{$prune_date}'")) {
+    echo "Pruned campaign_stats table. Affected rows: " . $conn->affected_rows . "\n";
+} else {
+    echo "Error pruning campaign_stats: " . $conn->error . "\n";
 }
 
-$stmt_agg->close();
-$conn->close();
+// Membersihkan rtb_requests
+if ($conn->query("DELETE FROM rtb_requests WHERE request_time < '{$prune_date} 00:00:00'")) {
+    echo "Pruned rtb_requests table. Affected rows: " . $conn->affected_rows . "\n";
+} else {
+    echo "Error pruning rtb_requests: " . $conn->error . "\n";
+}
 
-echo "Real-time aggregation script finished successfully at: " . date('H:i:s') . "\n";
+// Membersihkan vast_events
+if ($conn->query("DELETE FROM vast_events WHERE event_time < '{$prune_date} 00:00:00'")) {
+    echo "Pruned vast_events table. Affected rows: " . $conn->affected_rows . "\n";
+} else {
+    echo "Error pruning vast_events: " . $conn->error . "\n";
+}
+
+
+echo "\n==================================================\n";
+echo "Script finished successfully at: " . date('Y-m-d H:i:s') . "\n";
+echo "==================================================\n";
+
+$conn->close();
 ?>
