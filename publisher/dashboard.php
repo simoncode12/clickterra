@@ -51,21 +51,69 @@ function get_query_results($conn, $sql, $params = [], $types = '') {
     return $data;
 }
 
-// Semua query sekarang HANYA ke tabel ringkasan yang cepat
+// Semua query sekarang menggunakan pendekatan hybrid (historis + realtime)
+$today_date = date('Y-m-d');
+$yesterday_date = date('Y-m-d', strtotime('-1 day'));
+
+// Tentukan rentang tanggal untuk query historis dan realtime
+$date_hist_from = ($date_from < $today_date) ? $date_from : $today_date;
+$date_hist_to = ($date_to < $today_date) ? $date_to : $yesterday_date;
+
+// Ambil revenue_share untuk perhitungan earnings dari campaign_stats
+$revenue_share_query = get_query_results($conn, "SELECT revenue_share FROM users WHERE id = ?", [$publisher_id], "i");
+$revenue_share = $revenue_share_query[0]['revenue_share'] ?? 0;
+
 $base_summary_query = "FROM stats_daily_summary sds JOIN zones z ON sds.zone_id = z.id JOIN sites si ON z.site_id = si.id WHERE si.user_id = ?";
 
-// Data untuk kartu ringkasan
-$summary_sql = "SELECT SUM(sds.impressions) as total_impressions, SUM(sds.clicks) as total_clicks, SUM(sds.publisher_payout) as total_earnings {$base_summary_query} AND sds.stat_date BETWEEN ? AND ?";
-$summary_data = get_query_results($conn, $summary_sql, [$publisher_id, $date_from, $date_to], "iss")[0] ?? [];
+// Data untuk kartu ringkasan - menggunakan query hybrid
+$summary_sql = "
+    SELECT 
+        SUM(T.impressions) as total_impressions, 
+        SUM(T.clicks) as total_clicks, 
+        SUM(T.earnings) as total_earnings
+    FROM (
+        SELECT sds.impressions, sds.clicks, sds.publisher_payout as earnings
+        FROM stats_daily_summary sds 
+        JOIN zones z ON sds.zone_id = z.id 
+        JOIN sites si ON z.site_id = si.id 
+        WHERE si.user_id = ? AND sds.stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT cs.impressions, cs.clicks, (cs.cost * ? / 100) as earnings
+        FROM campaign_stats cs
+        JOIN zones z ON cs.zone_id = z.id 
+        JOIN sites si ON z.site_id = si.id 
+        WHERE si.user_id = ? AND cs.stat_date = ? AND cs.stat_date >= ?
+    ) AS T
+";
+$summary_data = get_query_results($conn, $summary_sql, [$publisher_id, $date_hist_from, $date_hist_to, $revenue_share, $publisher_id, $today_date, $date_from], "issdsis")[0] ?? [];
 $total_impressions = $summary_data['total_impressions'] ?? 0;
 $total_clicks = $summary_data['total_clicks'] ?? 0;
 $total_earnings = $summary_data['total_earnings'] ?? 0;
 $total_ctr = ($total_impressions > 0) ? ($total_clicks / $total_impressions) * 100 : 0;
 
-// Data untuk chart
-// --- PERBAIKAN UTAMA ADA DI SINI: BETWEEN ? AND ? ---
-$chart_sql = "SELECT sds.stat_date, SUM(sds.impressions) as daily_impressions, SUM(sds.publisher_payout) as daily_earnings {$base_summary_query} AND sds.stat_date BETWEEN ? AND ? GROUP BY sds.stat_date ORDER BY sds.stat_date ASC";
-$chart_result = get_query_results($conn, $chart_sql, [$publisher_id, $date_from, $date_to], "iss");
+// Data untuk chart - menggunakan query hybrid
+$chart_sql = "
+    SELECT 
+        T.stat_date, 
+        SUM(T.impressions) as daily_impressions, 
+        SUM(T.earnings) as daily_earnings
+    FROM (
+        SELECT sds.stat_date, sds.impressions, sds.publisher_payout as earnings
+        FROM stats_daily_summary sds 
+        JOIN zones z ON sds.zone_id = z.id 
+        JOIN sites si ON z.site_id = si.id 
+        WHERE si.user_id = ? AND sds.stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT cs.stat_date, cs.impressions, (cs.cost * ? / 100) as earnings
+        FROM campaign_stats cs
+        JOIN zones z ON cs.zone_id = z.id 
+        JOIN sites si ON z.site_id = si.id 
+        WHERE si.user_id = ? AND cs.stat_date = ? AND cs.stat_date >= ?
+    ) AS T
+    GROUP BY T.stat_date 
+    ORDER BY T.stat_date ASC
+";
+$chart_result = get_query_results($conn, $chart_sql, [$publisher_id, $date_hist_from, $date_hist_to, $revenue_share, $publisher_id, $today_date, $date_from], "issdsis");
 
 // Proses data untuk Chart.js
 $chart_impressions_data = []; $chart_earnings_data = [];
@@ -104,6 +152,16 @@ require_once __DIR__ . '/templates/header.php';
         </form>
     </div>
 </div>
+
+<?php
+$includes_today = ($date_to >= $today_date);
+?>
+<?php if ($includes_today): ?>
+<div class="alert alert-warning small mb-4">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    <strong>Note:</strong> Statistics for today (<?php echo date('j M Y'); ?>) are provisional and may change as data is updated in real-time. Historical data has been aggregated and is final.
+</div>
+<?php endif; ?>
 
 <div class="row">
     <div class="col-lg-3 col-md-6 mb-4">

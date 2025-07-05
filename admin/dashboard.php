@@ -51,21 +51,91 @@ function get_single_metric($conn, $sql, $params = [], $types = '') {
     return !empty($data) ? (float)array_values($data[0])[0] : 0;
 }
 
-// Semua query sekarang hanya ke tabel ringkasan
-$total_revenue = get_single_metric($conn, "SELECT SUM(cost) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
-$total_impressions = get_single_metric($conn, "SELECT SUM(impressions) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
-$total_clicks = get_single_metric($conn, "SELECT SUM(clicks) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
-$platform_profit = get_single_metric($conn, "SELECT SUM(cost - publisher_payout) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
+// Queries menggunakan pendekatan hybrid (historis + realtime)
+$today_date = date('Y-m-d');
+$yesterday_date = date('Y-m-d', strtotime('-1 day'));
+
+// Tentukan rentang tanggal untuk query historis dan realtime
+$date_hist_from = ($date_from < $today_date) ? $date_from : $today_date;
+$date_hist_to = ($date_to < $today_date) ? $date_to : $yesterday_date;
+
+$total_revenue = get_single_metric($conn, "
+    SELECT SUM(T.cost) FROM (
+        SELECT cost FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT cost FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+", [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
+
+$total_impressions = get_single_metric($conn, "
+    SELECT SUM(T.impressions) FROM (
+        SELECT impressions FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT impressions FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+", [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
+
+$total_clicks = get_single_metric($conn, "
+    SELECT SUM(T.clicks) FROM (
+        SELECT clicks FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT clicks FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+", [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
+
+$platform_profit = get_single_metric($conn, "
+    SELECT SUM(T.cost - T.publisher_payout) FROM (
+        SELECT cost, publisher_payout FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT cost, 0 as publisher_payout FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+", [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
 
 // Data untuk Grafik Performa
-$chart_sql = "SELECT stat_date, SUM(impressions) AS daily_impressions, SUM(cost) AS daily_revenue FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ? GROUP BY stat_date ORDER BY stat_date ASC";
-$chart_result = get_query_results($conn, $chart_sql, [$date_from, $date_to], "ss");
+$chart_sql = "
+    SELECT T.stat_date, SUM(T.impressions) AS daily_impressions, SUM(T.cost) AS daily_revenue 
+    FROM (
+        SELECT stat_date, impressions, cost FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT stat_date, impressions, cost FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+    GROUP BY T.stat_date 
+    ORDER BY T.stat_date ASC
+";
+$chart_result = get_query_results($conn, $chart_sql, [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
 
 // Data untuk Top 5 Lists
-$top_campaigns_sql = "SELECT c.name, SUM(sds.cost) as revenue FROM stats_daily_summary sds JOIN campaigns c ON sds.campaign_id = c.id WHERE sds.stat_date BETWEEN ? AND ? AND sds.campaign_id > 0 GROUP BY c.id, c.name ORDER BY revenue DESC LIMIT 5";
-$top_campaigns = get_query_results($conn, $top_campaigns_sql, [$date_from, $date_to], "ss");
-$top_supply_sql = "SELECT rs.name, SUM(sds.cost) as total_revenue, SUM(sds.cost - sds.publisher_payout) as platform_profit FROM stats_daily_summary sds LEFT JOIN zones z ON sds.zone_id = z.id LEFT JOIN sites si ON z.site_id = si.id LEFT JOIN rtb_supply_sources rs ON si.user_id = rs.user_id WHERE sds.stat_date BETWEEN ? AND ? AND rs.id IS NOT NULL GROUP BY rs.id, rs.name ORDER BY total_revenue DESC LIMIT 5";
-$top_supply = get_query_results($conn, $top_supply_sql, [$date_from, $date_to], "ss");
+$top_campaigns_sql = "
+    SELECT c.name, SUM(T.cost) as revenue 
+    FROM (
+        SELECT campaign_id, cost FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT campaign_id, cost FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+    JOIN campaigns c ON T.campaign_id = c.id 
+    WHERE T.campaign_id > 0 
+    GROUP BY c.id, c.name 
+    ORDER BY revenue DESC 
+    LIMIT 5
+";
+$top_campaigns = get_query_results($conn, $top_campaigns_sql, [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
+
+$top_supply_sql = "
+    SELECT rs.name, SUM(T.cost) as total_revenue, SUM(T.cost - T.publisher_payout) as platform_profit 
+    FROM (
+        SELECT zone_id, cost, publisher_payout FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?
+        UNION ALL
+        SELECT zone_id, cost, 0 as publisher_payout FROM campaign_stats WHERE stat_date = ? AND stat_date >= ?
+    ) AS T
+    LEFT JOIN zones z ON T.zone_id = z.id 
+    LEFT JOIN sites si ON z.site_id = si.id 
+    LEFT JOIN rtb_supply_sources rs ON si.user_id = rs.user_id 
+    WHERE rs.id IS NOT NULL 
+    GROUP BY rs.id, rs.name 
+    ORDER BY total_revenue DESC 
+    LIMIT 5
+";
+$top_supply = get_query_results($conn, $top_supply_sql, [$date_hist_from, $date_hist_to, $today_date, $date_from], "ssss");
 
 // Proses data untuk Chart.js
 $chart_impressions_data = []; $chart_revenue_data = [];
@@ -103,7 +173,19 @@ require_once __DIR__ . '/templates/header.php';
         </form>
     </div>
 </div>
-<div class="alert alert-info small"><i class="bi bi-info-circle-fill"></i> Note: Dashboard data is summarized for performance. "Today" reflects data from the last aggregation (up to 5 mins ago).</div>
+<?php
+$includes_today = ($date_to >= $today_date);
+?>
+<?php if ($includes_today): ?>
+<div class="alert alert-warning small">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    <strong>Note:</strong> Statistics for today (<?php echo date('j M Y'); ?>) include real-time data and may change throughout the day. Historical data has been aggregated and is final.
+</div>
+<?php else: ?>
+<div class="alert alert-info small">
+    <i class="bi bi-info-circle-fill"></i> Note: Dashboard data is summarized for performance and shows historical aggregated data.
+</div>
+<?php endif; ?>
 
 <div class="row">
     <div class="col-xl-3 col-md-6 mb-4"><div class="card border-left-primary shadow h-100 py-2"><div class="card-body"><div class="row no-gutters align-items-center"><div class="col mr-2"><div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Total Revenue</div><div class="h5 mb-0 font-weight-bold text-gray-800">$<?php echo number_format($total_revenue, 4); ?></div></div><div class="col-auto"><i class="bi bi-cash-coin fs-2 text-gray-300"></i></div></div></div></div></div>
