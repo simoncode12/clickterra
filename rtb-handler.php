@@ -10,6 +10,14 @@ if (file_exists(__DIR__ . '/includes/settings.php')) {
 if (file_exists(__DIR__ . '/includes/visitor_detector.php')) {
     require_once __DIR__ . '/includes/visitor_detector.php';
 }
+if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
+    require_once __DIR__ . '/includes/fraud_detector.php';
+    if (is_fraudulent_request($conn)) {
+        http_response_code(204); // Blokir dengan senyap
+        $conn->close();
+        exit();
+    }
+}
 if (!function_exists('get_visitor_details')) {
     function get_visitor_details() { return ['country' => 'XX', 'os' => 'unknown', 'browser' => 'unknown', 'device' => 'unknown']; }
 }
@@ -20,14 +28,7 @@ if (!function_exists('get_setting')) {
         return "{$protocol}://{$host}";
     }
 }
-if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
-    require_once __DIR__ . '/includes/fraud_detector.php';
-    if (is_fraudulent_request($conn)) {
-        // Jika terdeteksi fraud, hentikan eksekusi dengan senyap
-        http_response_code(204); // 204 No Content
-        exit();
-    }
-}
+
 // --- Constants ---
 define('EXTERNAL_CAMPAIGN_ID', -1);
 define('EXTERNAL_CREATIVE_ID', -1);
@@ -63,12 +64,7 @@ if (json_last_error() !== JSON_ERROR_NONE) {
 
 // --- Validasi Supply Source & Ambil Revenue Share ---
 $supply_key = $_GET['key'] ?? '';
-$stmt_source = $conn->prepare(
-    "SELECT rs.id, rs.user_id, rs.default_zone_id, u.revenue_share 
-     FROM rtb_supply_sources rs
-     JOIN users u ON rs.user_id = u.id
-     WHERE rs.supply_key = ? AND rs.status = 'active'"
-);
+$stmt_source = $conn->prepare("SELECT rs.id, rs.user_id, rs.default_zone_id, u.revenue_share FROM rtb_supply_sources rs JOIN users u ON rs.user_id = u.id WHERE rs.supply_key = ? AND rs.status = 'active'");
 $stmt_source->bind_param("s", $supply_key);
 $stmt_source->execute();
 $supply_source = $stmt_source->get_result()->fetch_assoc();
@@ -102,9 +98,11 @@ $impid = $imp['id'] ?? '1';
 $is_video_request = isset($imp['video']);
 
 if ($is_video_request) {
-    $w = $imp['video']['w'] ?? 640; $h = $imp['video']['h'] ?? 480;
+    $w = $imp['video']['w'] ?? 640;
+    $h = $imp['video']['h'] ?? 480;
 } else {
-    $w = $imp['banner']['w'] ?? 0; $h = $imp['banner']['h'] ?? 0;
+    $w = $imp['banner']['w'] ?? 0;
+    $h = $imp['banner']['h'] ?? 0;
 }
 $req_size = "{$w}x{$h}";
 
@@ -136,18 +134,24 @@ $endpoint_key = $is_video_request ? 'vast_endpoint_url' : 'endpoint_url';
 $ssp_partners = $conn->query("SELECT id, name, {$endpoint_key} FROM ssp_partners WHERE {$endpoint_key} IS NOT NULL AND {$endpoint_key} != ''")->fetch_all(MYSQLI_ASSOC);
 
 foreach ($ssp_partners as $ssp) {
-    $ssp_endpoint = $ssp[$endpoint_key];
+    $ssp_endpoint = $ssp[$endpoint_key] ?? null;
+    if (empty($ssp_endpoint)) continue;
+    
     $ch = curl_init($ssp_endpoint);
     curl_setopt_array($ch, [CURLOPT_POST => 1, CURLOPT_POSTFIELDS => $request_body, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_TIMEOUT_MS => 200]);
     $ssp_response_body = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
 
     if ($http_code === 200 && !empty($ssp_response_body)) {
+        error_log("SSP Response from " . $ssp['name'] . ": " . $ssp_response_body);
         $ssp_bid = json_decode($ssp_response_body, true);
         $ssp_price = $ssp_bid['seatbid'][0]['bid'][0]['price'] ?? 0;
         if ($ssp_price > $best_bid_price) {
-            $best_bid_price = $ssp_price; $winning_creative = $ssp_bid['seatbid'][0]['bid'][0];
-            $winning_source = 'external'; $winning_ssp_id = $ssp['id'];
+            $best_bid_price = $ssp_price;
+            $winning_creative = $ssp_bid['seatbid'][0]['bid'][0];
+            $winning_source = 'external';
+            $winning_ssp_id = $ssp['id'];
         }
     }
 }
@@ -157,14 +161,14 @@ if ($winning_source !== 'none') {
     $publisher_price = $best_bid_price * ($publisher_revenue_share / 100.0);
     $is_bid_sent_for_log = 1;
     $price_for_log = $best_bid_price;
-    $adm = ''; $cid = ''; $crid = ''; $adomain = []; $today = date('Y-m-d');
-    $cost_for_impression = $best_bid_price / 1000.0;
+    $adm = ''; $cid = ''; $crid = ''; $adomain = [];
+    $today = date('Y-m-d');
     
     if ($winning_source === 'internal') {
         $cid = (string)$winning_creative['campaign_id'];
         $crid = (string)$winning_creative['id'];
         $adomain = !empty($winning_creative['landing_url']) ? [parse_url($winning_creative['landing_url'], PHP_URL_HOST)] : [];
-        $cost_for_impression = ($winning_creative['bid_model'] === 'cpm') ? $cost_for_impression : 0.0;
+        $cost_for_impression = ($winning_creative['bid_model'] === 'cpm') ? ($best_bid_price / 1000.0) : 0.0;
         $ad_server_domain = get_setting('ad_server_domain', $conn);
         
         if ($is_video_request) {
@@ -190,21 +194,29 @@ if ($winning_source !== 'none') {
         $stmt_stats->bind_param("iiisssssd", $cid, $crid, $zone_id_for_log, $visitor_details_for_log['country'], $visitor_details_for_log['os'], $visitor_details_for_log['browser'], $visitor_details_for_log['device'], $today, $cost_for_impression);
     
     } else { // External Winner
-        $cid = $winning_creative['cid'] ?? 'external_campaign'; $crid = $winning_creative['crid'] ?? 'external_creative';
-        $adm = $winning_creative['adm']; $adomain = $winning_creative['adomain'] ?? [];
-        $campaign_id_var = EXTERNAL_CAMPAIGN_ID; $creative_id_var = EXTERNAL_CREATIVE_ID;
+        $cid = $winning_creative['cid'] ?? 'external_campaign';
+        $crid = $winning_creative['crid'] ?? 'external_creative';
+        $adm = $winning_creative['adm'] ?? '';
+        $adomain = $winning_creative['adomain'] ?? [];
+        $cost_for_impression = $best_bid_price / 1000.0;
+        
+        $campaign_id_var = EXTERNAL_CAMPAIGN_ID;
+        $creative_id_var = EXTERNAL_CREATIVE_ID;
         $stmt_stats = $conn->prepare("INSERT INTO campaign_stats (campaign_id, creative_id, ssp_partner_id, zone_id, country, os, browser, device, stat_date, impressions, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE impressions = impressions + 1, cost = cost + VALUES(cost)");
         $stmt_stats->bind_param("iiiiissssd", $campaign_id_var, $creative_id_var, $winning_ssp_id, $zone_id_for_log, $visitor_details_for_log['country'], $visitor_details_for_log['os'], $visitor_details_for_log['browser'], $visitor_details_for_log['device'], $today, $cost_for_impression);
     }
     
-    if (isset($stmt_stats) && $stmt_stats) { $stmt_stats->execute(); $stmt_stats->close(); }
+    if (isset($stmt_stats) && $stmt_stats) {
+        $stmt_stats->execute();
+        $stmt_stats->close();
+    }
     
     http_response_code(200);
     echo json_encode(['id' => $request_id, 'seatbid' => [['bid' => [['id' => uniqid('bid_'), 'impid' => $impid, 'price' => (float)$publisher_price, 'adm' => $adm, 'adomain' => $adomain, 'cid' => $cid, 'crid' => $crid, 'w' => $w, 'h' => $h]], 'seat' => 'clicterra_dps']]]);
 
 } else {
     $is_bid_sent_for_log = 0;
-    http_response_code(204);
+    http_response_code(204); // No Bid
 }
 
 // === FINAL LOGGING STEP ===
