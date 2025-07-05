@@ -1,10 +1,10 @@
 <?php
-// File: /admin/dashboard.php (DEFINITIVE FINAL - Ultra Optimized, reads ONLY from summary table)
+// File: /admin/dashboard.php (DEFINITIVE FINAL - Complete & Fully Optimized)
 
 require_once __DIR__ . '/init.php';
 
 // --- 1. LOGIKA FILTER TANGGAL ---
-$range = $_GET['range'] ?? 'today'; // Default ke 'today', yang sekarang juga cepat
+$range = $_GET['range'] ?? 'today';
 $today = date('Y-m-d');
 $yesterday = date('Y-m-d', strtotime('-1 day'));
 
@@ -30,7 +30,7 @@ switch ($range) {
         break;
 }
 
-// --- 2. LOGIKA PENGAMBILAN DATA (SUPER CEPAT) ---
+// --- 2. LOGIKA PENGAMBILAN DATA (OPTIMIZED) ---
 function get_query_results($conn, $sql, $params = [], $types = '') {
     $stmt = $conn->prepare($sql);
     if ($stmt === false) { 
@@ -51,7 +51,7 @@ function get_single_metric($conn, $sql, $params = [], $types = '') {
     return !empty($data) ? (float)array_values($data[0])[0] : 0;
 }
 
-// SEMUA QUERY SEKARANG HANYA KE TABEL RINGKASAN
+// Semua query sekarang hanya ke tabel ringkasan
 $total_revenue = get_single_metric($conn, "SELECT SUM(cost) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
 $total_impressions = get_single_metric($conn, "SELECT SUM(impressions) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
 $total_clicks = get_single_metric($conn, "SELECT SUM(clicks) FROM stats_daily_summary WHERE stat_date BETWEEN ? AND ?", [$date_from, $date_to], "ss");
@@ -64,7 +64,6 @@ $chart_result = get_query_results($conn, $chart_sql, [$date_from, $date_to], "ss
 // Data untuk Top 5 Lists
 $top_campaigns_sql = "SELECT c.name, SUM(sds.cost) as revenue FROM stats_daily_summary sds JOIN campaigns c ON sds.campaign_id = c.id WHERE sds.stat_date BETWEEN ? AND ? AND sds.campaign_id > 0 GROUP BY c.id, c.name ORDER BY revenue DESC LIMIT 5";
 $top_campaigns = get_query_results($conn, $top_campaigns_sql, [$date_from, $date_to], "ss");
-
 $top_supply_sql = "SELECT rs.name, SUM(sds.cost) as total_revenue, SUM(sds.cost - sds.publisher_payout) as platform_profit FROM stats_daily_summary sds LEFT JOIN zones z ON sds.zone_id = z.id LEFT JOIN sites si ON z.site_id = si.id LEFT JOIN rtb_supply_sources rs ON si.user_id = rs.user_id WHERE sds.stat_date BETWEEN ? AND ? AND rs.id IS NOT NULL GROUP BY rs.id, rs.name ORDER BY total_revenue DESC LIMIT 5";
 $top_supply = get_query_results($conn, $top_supply_sql, [$date_from, $date_to], "ss");
 
@@ -104,6 +103,7 @@ require_once __DIR__ . '/templates/header.php';
         </form>
     </div>
 </div>
+<div class="alert alert-info small"><i class="bi bi-info-circle-fill"></i> Note: Dashboard data is summarized for performance. "Today" reflects data from the last aggregation (up to 5 mins ago).</div>
 
 <div class="row">
     <div class="col-xl-3 col-md-6 mb-4"><div class="card border-left-primary shadow h-100 py-2"><div class="card-body"><div class="row no-gutters align-items-center"><div class="col mr-2"><div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Total Revenue</div><div class="h5 mb-0 font-weight-bold text-gray-800">$<?php echo number_format($total_revenue, 4); ?></div></div><div class="col-auto"><i class="bi bi-cash-coin fs-2 text-gray-300"></i></div></div></div></div></div>
@@ -118,6 +118,7 @@ require_once __DIR__ . '/templates/header.php';
     <div class="col-lg-6 mb-4"><div class="card shadow"><div class="card-header py-3"><h6 class="m-0 font-weight-bold">Top 5 Campaigns by Revenue</h6></div><div class="card-body"><ul class="list-group list-group-flush"><?php if(!empty($top_campaigns)): foreach($top_campaigns as $c): ?><li class="list-group-item d-flex justify-content-between align-items-center"><?php echo htmlspecialchars($c['name']); ?><span class="badge bg-primary rounded-pill">$<?php echo number_format($c['revenue'], 4); ?></span></li><?php endforeach; else: ?><li class="list-group-item">No data available for this period.</li><?php endif; ?></ul></div></div></div>
     <div class="col-lg-6 mb-4"><div class="card shadow"><div class="card-header py-3"><h6 class="m-0 font-weight-bold">Top 5 Supply Partners</h6></div><div class="card-body"><ul class="list-group list-group-flush"><?php if(!empty($top_supply)): foreach($top_supply as $s): ?><li class="list-group-item"><div class="d-flex justify-content-between"><span><?php echo htmlspecialchars($s['name']); ?></span><strong>$<?php echo number_format($s['total_revenue'], 4); ?></strong></div><div class="d-flex justify-content-between text-muted small"><span>Platform Profit</span><span>$<?php echo number_format($s['platform_profit'], 4); ?></span></div></li><?php endforeach; else: ?><li class="list-group-item">No data available for this period.</li><?php endif; ?></ul></div></div></div>
 </div>
+
 
 <style>.border-left-primary{border-left:.25rem solid #4e73df!important}.border-left-success{border-left:.25rem solid #1cc88a!important}.border-left-info{border-left:.25rem solid #36b9cc!important}.border-left-dark{border-left:.25rem solid #5a5c69!important}.text-xs{font-size:.7rem}.text-gray-300{color:#dddfeb!important}</style>
 <script>
