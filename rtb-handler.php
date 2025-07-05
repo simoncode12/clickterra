@@ -146,12 +146,14 @@ foreach ($ssp_partners as $ssp) {
     if ($http_code === 200 && !empty($ssp_response_body)) {
         error_log("SSP Response from " . $ssp['name'] . ": " . $ssp_response_body);
         $ssp_bid = json_decode($ssp_response_body, true);
-        $ssp_price = $ssp_bid['seatbid'][0]['bid'][0]['price'] ?? 0;
-        if ($ssp_price > $best_bid_price) {
-            $best_bid_price = $ssp_price;
-            $winning_creative = $ssp_bid['seatbid'][0]['bid'][0];
-            $winning_source = 'external';
-            $winning_ssp_id = $ssp['id'];
+        if (json_last_error() === JSON_ERROR_NONE) {
+            $ssp_price = $ssp_bid['seatbid'][0]['bid'][0]['price'] ?? 0;
+            if ($ssp_price > $best_bid_price) {
+                $best_bid_price = $ssp_price;
+                $winning_creative = $ssp_bid['seatbid'][0]['bid'][0];
+                $winning_source = 'external';
+                $winning_ssp_id = $ssp['id'];
+            }
         }
     }
 }
