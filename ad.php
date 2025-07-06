@@ -7,7 +7,8 @@ require_once __DIR__ . '/config/database.php';
 if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
     require_once __DIR__ . '/includes/fraud_detector.php';
     if (is_fraudulent_request($conn)) {
-        http_response_code(204); // Blokir dengan senyap
+        // Jika terdeteksi fraud, hentikan eksekusi dengan senyap.
+        http_response_code(204); // 204 No Content
         $conn->close();
         exit();
     }
