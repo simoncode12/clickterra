@@ -47,10 +47,14 @@ $stmt_zone = $conn->prepare(
      JOIN rtb_supply_sources rs ON s.user_id = rs.user_id 
      WHERE z.id = ? AND rs.status = 'active' LIMIT 1"
 );
-$stmt_zone->bind_param("i", $zone_id);
-$stmt_zone->execute();
-$zone_info = $stmt_zone->get_result()->fetch_assoc();
-$stmt_zone->close();
+if ($stmt_zone) {
+    $stmt_zone->bind_param("i", $zone_id);
+    $stmt_zone->execute();
+    $zone_info = $stmt_zone->get_result()->fetch_assoc();
+    $stmt_zone->close();
+} else {
+    $zone_info = null;
+}
 
 if (!$zone_info || empty($zone_info['supply_key'])) {
     exit_silently("Zone or active supply key not found for Zone ID: {$zone_id}");
