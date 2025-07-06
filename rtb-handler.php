@@ -1,19 +1,24 @@
 <?php
-// File: /rtb-handler.php (FINAL & CLEAN - Removed SSP response logging)
+// File: /rtb-handler.php (DEFINITIVE FINAL VERSION - All features and fixes included)
 
 require_once __DIR__ . '/config/database.php';
 
 // Muat helper-helper penting dengan fallback
 if (file_exists(__DIR__ . '/includes/settings.php')) { require_once __DIR__ . '/includes/settings.php'; }
 if (file_exists(__DIR__ . '/includes/visitor_detector.php')) { require_once __DIR__ . '/includes/visitor_detector.php'; }
-if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
-    require_once __DIR__ . '/includes/fraud_detector.php';
-    if (!isset($_GET['internal_call']) && is_fraudulent_request($conn)) {
-        http_response_code(204);
-        $conn->close();
-        exit();
+
+// Hanya jalankan pemeriksaan fraud jika ini BUKAN panggilan internal dari ad.php/vast.php
+if (!isset($_GET['internal_call'])) {
+    if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
+        require_once __DIR__ . '/includes/fraud_detector.php';
+        if (is_fraudulent_request($conn)) {
+            http_response_code(204);
+            $conn->close();
+            exit();
+        }
     }
 }
+
 if (!function_exists('get_visitor_details')) { function get_visitor_details() { return ['country' => 'XX', 'os' => 'unknown', 'browser' => 'unknown', 'device' => 'unknown']; } }
 if (!function_exists('get_setting')) { function get_setting($key, $conn) { return 'https://' . ($_SERVER['HTTP_HOST'] ?? 'userpanel.clicterra.com'); } }
 
@@ -58,13 +63,13 @@ $req_size = "{$w}x{$h}";
 // --- LELANG KOMPETITIF PENUH ---
 $best_bid_price = 0; $winning_creative = null; $winning_source = 'none'; $winning_ssp_id = null;
 
-// 1. Lelang Internal
+// 1. Lelang Internal (RON)
 $internal_candidate = null;
 if ($is_video_request) {
-    $sql_internal = "SELECT v.*, c.id as campaign_id, v.bid_model, v.bid_amount FROM video_creatives v JOIN campaigns c ON v.campaign_id = c.id WHERE c.status = 'active' AND v.status = 'active' AND c.allow_external_rtb = 1 ORDER BY v.bid_amount DESC, RAND() LIMIT 1";
+    $sql_internal = "SELECT v.*, c.id as campaign_id, c.ad_format_id, v.bid_model, v.bid_amount FROM video_creatives v JOIN campaigns c ON v.campaign_id = c.id WHERE c.status = 'active' AND v.status = 'active' AND c.allow_external_rtb = 1 ORDER BY v.bid_amount DESC, RAND() LIMIT 1";
     $internal_candidate = $conn->query($sql_internal)->fetch_assoc();
 } else {
-    $sql_internal = "SELECT cr.*, c.id as campaign_id FROM creatives cr JOIN campaigns c ON cr.campaign_id = c.id WHERE c.status = 'active' AND c.allow_external_rtb = 1 AND cr.status = 'active' AND (cr.sizes = ? OR cr.sizes = 'all') ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
+    $sql_internal = "SELECT cr.*, c.id as campaign_id, c.ad_format_id FROM creatives cr JOIN campaigns c ON cr.campaign_id = c.id WHERE c.status = 'active' AND c.allow_external_rtb = 1 AND cr.status = 'active' AND (cr.sizes = ? OR cr.sizes = 'all') ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
     $stmt_internal = $conn->prepare($sql_internal);
     $stmt_internal->bind_param("s", $req_size);
     $stmt_internal->execute();
@@ -84,11 +89,8 @@ foreach ($ssp_partners as $ssp) {
     $ssp_endpoint = $ssp[$endpoint_key];
     $ch = curl_init($ssp_endpoint);
     curl_setopt_array($ch, [CURLOPT_POST => 1, CURLOPT_POSTFIELDS => $request_body, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_TIMEOUT_MS => 200]);
-    $ssp_response_body = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
-
+    $ssp_response_body = curl_exec($ch); $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
     if ($http_code === 200 && !empty($ssp_response_body)) {
-        // PERBAIKAN: Baris ini sekarang diberi komentar agar tidak memenuhi log
         // error_log("SSP Response from " . $ssp['name'] . ": " . $ssp_response_body);
         $ssp_bid = json_decode($ssp_response_body, true);
         if (json_last_error() === JSON_ERROR_NONE) {
