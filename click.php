@@ -1,34 +1,24 @@
 <?php
 // File: /click.php (FINAL - Standardized and Corrected)
-
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/visitor_detector.php';
 
 $creative_id = filter_input(INPUT_GET, 'cid', FILTER_VALIDATE_INT);
-$zone_id = filter_input(INPUT_GET, 'zone_id', FILTER_VALIDATE_INT);
+$zone_id = filter_input(INPUT_GET, 'zone_id', FILTER_VALIDATE_INT); // PERBAIKAN: Gunakan 'zone_id'
 if (!$creative_id || !$zone_id) { 
-    // Keluar dengan tenang jika parameter tidak valid
     http_response_code(400);
     exit("Invalid tracking parameters."); 
 }
 
 // Ambil landing_url dan detail bid dari creative
-// Perbaikan: JOIN dengan campaigns untuk memastikan kampanye aktif
-$stmt_creative = $conn->prepare(
-    "SELECT cr.landing_url, cr.campaign_id, cr.bid_model, cr.bid_amount 
-     FROM creatives cr
-     JOIN campaigns c ON cr.campaign_id = c.id
-     WHERE cr.id = ? AND c.status = 'active' AND cr.status = 'active'"
-);
+$stmt_creative = $conn->prepare("SELECT cr.landing_url, cr.campaign_id, cr.bid_model, cr.bid_amount FROM creatives cr JOIN campaigns c ON cr.campaign_id = c.id WHERE cr.id = ? AND c.status = 'active'");
 $stmt_creative->bind_param("i", $creative_id);
 $stmt_creative->execute();
 $creative = $stmt_creative->get_result()->fetch_assoc();
 $stmt_creative->close();
-
-if (!$creative || empty($creative['landing_url'])) { 
-    // Jika creative tidak ditemukan atau tidak memiliki landing page, keluar.
+if (!$creative || empty($creative['landing_url'])) {
     http_response_code(404);
-    exit("Redirect URL not found or creative is not active."); 
+    exit("Redirect URL not found or creative is not active.");
 }
 
 // Gunakan helper terpusat untuk data pengunjung yang akurat
