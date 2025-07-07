@@ -19,7 +19,7 @@ if (!isset($_GET['internal_call'])) {
     }
 }
 
-if (!function_exists('get_visitor_details')) { function get_visitor_details() { return ['country' => 'XX', 'os' => 'unknown', 'browser' => 'unknown', 'device' => 'unknown']; } }
+// Visitor details function is loaded from includes/visitor_detector.php above
 if (!function_exists('get_setting')) { function get_setting($key, $conn) { return 'https://' . ($_SERVER['HTTP_HOST'] ?? 'userpanel.clicterra.com'); } }
 
 define('EXTERNAL_CAMPAIGN_ID', -1);
