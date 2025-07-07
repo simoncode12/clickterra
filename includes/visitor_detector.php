@@ -87,9 +87,11 @@ function get_visitor_details() {
     elseif (preg_match('/mac os/i', $user_agent)) $os = 'macOS';
 
     $browser = 'Unknown';
-    if (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
+    if (preg_match('/edg/i', $user_agent)) $browser = 'Edge';
+    elseif (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
     elseif (preg_match('/chrome/i', $user_agent) && !preg_match('/edg/i', $user_agent)) $browser = 'Chrome';
     elseif (preg_match('/safari/i', $user_agent) && !preg_match('/chrome/i', $user_agent)) $browser = 'Safari';
+    elseif (preg_match('/opera|opr/i', $user_agent)) $browser = 'Opera';
 
     $device = 'Desktop';
     if (preg_match('/(tablet|ipad)|(android(?!.*mobi))/i', $user_agent)) { $device = 'Tablet'; } 
@@ -114,10 +116,21 @@ function detect_country_by_ip_prefix($ip) {
         // Cloudflare DNS
         ['1.1.1.0', '1.1.1.255', 'US'],
         ['1.0.0.0', '1.0.0.255', 'US'],
-        // Some Indonesian ranges (examples)
+        // Indonesian IP ranges (expanded)
         ['103.10.0.0', '103.10.255.255', 'ID'],
+        ['103.28.0.0', '103.28.255.255', 'ID'],
         ['118.97.0.0', '118.97.255.255', 'ID'],
+        ['118.98.0.0', '118.98.255.255', 'ID'],
         ['202.43.0.0', '202.43.255.255', 'ID'],
+        ['202.67.0.0', '202.67.255.255', 'ID'],
+        ['202.152.0.0', '202.152.255.255', 'ID'],
+        ['203.142.0.0', '203.142.255.255', 'ID'],
+        ['180.244.0.0', '180.244.255.255', 'ID'],
+        ['114.120.0.0', '114.120.255.255', 'ID'],
+        // German IP ranges (since DE was mentioned as incorrect in problem)
+        ['85.14.0.0', '85.14.255.255', 'DE'],
+        ['217.160.0.0', '217.160.255.255', 'DE'],
+        ['62.104.0.0', '62.104.255.255', 'DE'],
     ];
     
     foreach ($ranges as $range) {

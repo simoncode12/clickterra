@@ -33,9 +33,11 @@ if (!function_exists('get_visitor_details')) {
         elseif (preg_match('/mac os/i', $user_agent)) $os = 'macOS';
 
         $browser = 'Unknown';
-        if (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
+        if (preg_match('/edg/i', $user_agent)) $browser = 'Edge';
+        elseif (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
         elseif (preg_match('/chrome/i', $user_agent) && !preg_match('/edg/i', $user_agent)) $browser = 'Chrome';
         elseif (preg_match('/safari/i', $user_agent) && !preg_match('/chrome/i', $user_agent)) $browser = 'Safari';
+        elseif (preg_match('/opera|opr/i', $user_agent)) $browser = 'Opera';
 
         $device = 'Desktop';
         if (preg_match('/(tablet|ipad)|(android(?!.*mobi))/i', $user_agent)) { $device = 'Tablet'; } 
