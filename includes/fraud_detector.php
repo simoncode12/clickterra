@@ -2,8 +2,13 @@
 // File: /includes/fraud_detector.php (NEW)
 
 function is_fraudulent_request($conn) {
-    // Ambil data request saat ini
-    $ip_address = $_SERVER['REMOTE_ADDR'] ?? '';
+    // Get real IP address using the visitor detector function if available
+    if (function_exists('get_real_ip_address')) {
+        $ip_address = get_real_ip_address();
+    } else {
+        $ip_address = $_SERVER['REMOTE_ADDR'] ?? '';
+    }
+    
     $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
     $domain = parse_url($_SERVER['HTTP_REFERER'] ?? '', PHP_URL_HOST);
     

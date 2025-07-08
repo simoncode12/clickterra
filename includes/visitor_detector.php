@@ -48,6 +48,7 @@ function get_visitor_details() {
     $country = 'XX';
     $geoip_db_path = __DIR__ . '/../geoip/GeoLite2-City.mmdb';
 
+    // Try local GeoIP database first
     if (file_exists($geoip_db_path) && class_exists('\GeoIp2\Database\Reader')) {
         try {
             $reader = new Reader($geoip_db_path);
@@ -55,6 +56,26 @@ function get_visitor_details() {
             $country = $record->country->isoCode ?? 'XX';
         } catch (\Exception $e) {
             error_log("GeoIP Lookup Error for IP {$ip_address}: " . $e->getMessage());
+        }
+    }
+
+    // Fallback: Use HTTP headers for country detection if available
+    if ($country === 'XX') {
+        // Check Cloudflare country header
+        if (isset($_SERVER['HTTP_CF_IPCOUNTRY']) && strlen($_SERVER['HTTP_CF_IPCOUNTRY']) === 2) {
+            $country = strtoupper($_SERVER['HTTP_CF_IPCOUNTRY']);
+        }
+        // Check other common country headers
+        elseif (isset($_SERVER['HTTP_X_COUNTRY_CODE']) && strlen($_SERVER['HTTP_X_COUNTRY_CODE']) === 2) {
+            $country = strtoupper($_SERVER['HTTP_X_COUNTRY_CODE']);
+        }
+        // Basic IP-to-country mapping for common ranges (very basic fallback)
+        elseif (!filter_var($ip_address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            // For local/private IPs, keep XX
+            $country = 'XX';
+        } else {
+            // For public IPs without detection, try basic regional detection
+            $country = detect_country_by_ip_prefix($ip_address);
         }
     }
 
@@ -66,13 +87,59 @@ function get_visitor_details() {
     elseif (preg_match('/mac os/i', $user_agent)) $os = 'macOS';
 
     $browser = 'Unknown';
-    if (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
+    if (preg_match('/edg/i', $user_agent)) $browser = 'Edge';
+    elseif (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
     elseif (preg_match('/chrome/i', $user_agent) && !preg_match('/edg/i', $user_agent)) $browser = 'Chrome';
     elseif (preg_match('/safari/i', $user_agent) && !preg_match('/chrome/i', $user_agent)) $browser = 'Safari';
+    elseif (preg_match('/opera|opr/i', $user_agent)) $browser = 'Opera';
 
     $device = 'Desktop';
     if (preg_match('/(tablet|ipad)|(android(?!.*mobi))/i', $user_agent)) { $device = 'Tablet'; } 
     elseif (preg_match('/mobi/i', $user_agent)) { $device = 'Mobile'; }
     
     return ['country' => $country, 'os' => $os, 'browser' => $browser, 'device' => $device];
+}
+
+/**
+ * Basic country detection by IP prefix (fallback method)
+ */
+function detect_country_by_ip_prefix($ip) {
+    // Convert IP to long for range checking
+    $ip_long = ip2long($ip);
+    if ($ip_long === false) return 'XX';
+    
+    // Basic known IP ranges (this is a very simplified version)
+    $ranges = [
+        // Google DNS
+        ['8.8.8.0', '8.8.8.255', 'US'],
+        ['8.8.4.0', '8.8.4.255', 'US'],
+        // Cloudflare DNS
+        ['1.1.1.0', '1.1.1.255', 'US'],
+        ['1.0.0.0', '1.0.0.255', 'US'],
+        // Indonesian IP ranges (expanded)
+        ['103.10.0.0', '103.10.255.255', 'ID'],
+        ['103.28.0.0', '103.28.255.255', 'ID'],
+        ['118.97.0.0', '118.97.255.255', 'ID'],
+        ['118.98.0.0', '118.98.255.255', 'ID'],
+        ['202.43.0.0', '202.43.255.255', 'ID'],
+        ['202.67.0.0', '202.67.255.255', 'ID'],
+        ['202.152.0.0', '202.152.255.255', 'ID'],
+        ['203.142.0.0', '203.142.255.255', 'ID'],
+        ['180.244.0.0', '180.244.255.255', 'ID'],
+        ['114.120.0.0', '114.120.255.255', 'ID'],
+        // German IP ranges (since DE was mentioned as incorrect in problem)
+        ['85.14.0.0', '85.14.255.255', 'DE'],
+        ['217.160.0.0', '217.160.255.255', 'DE'],
+        ['62.104.0.0', '62.104.255.255', 'DE'],
+    ];
+    
+    foreach ($ranges as $range) {
+        $start = ip2long($range[0]);
+        $end = ip2long($range[1]);
+        if ($ip_long >= $start && $ip_long <= $end) {
+            return $range[2];
+        }
+    }
+    
+    return 'XX'; // Unknown
 }

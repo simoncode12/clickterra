@@ -19,7 +19,33 @@ if (!isset($_GET['internal_call'])) {
     }
 }
 
-if (!function_exists('get_visitor_details')) { function get_visitor_details() { return ['country' => 'XX', 'os' => 'unknown', 'browser' => 'unknown', 'device' => 'unknown']; } }
+// Ensure visitor detection is available - if not included, provide minimal fallback
+if (!function_exists('get_visitor_details')) { 
+    function get_visitor_details() { 
+        // Basic fallback without GeoIP
+        $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'UNKNOWN';
+        
+        $os = 'Unknown';
+        if (preg_match('/windows/i', $user_agent)) $os = 'Windows';
+        elseif (preg_match('/android/i', $user_agent)) $os = 'Android';
+        elseif (preg_match('/linux/i', $user_agent)) $os = 'Linux';
+        elseif (preg_match('/(iphone|ipad|ipod)/i', $user_agent)) $os = 'iOS';
+        elseif (preg_match('/mac os/i', $user_agent)) $os = 'macOS';
+
+        $browser = 'Unknown';
+        if (preg_match('/edg/i', $user_agent)) $browser = 'Edge';
+        elseif (preg_match('/firefox/i', $user_agent)) $browser = 'Firefox';
+        elseif (preg_match('/chrome/i', $user_agent) && !preg_match('/edg/i', $user_agent)) $browser = 'Chrome';
+        elseif (preg_match('/safari/i', $user_agent) && !preg_match('/chrome/i', $user_agent)) $browser = 'Safari';
+        elseif (preg_match('/opera|opr/i', $user_agent)) $browser = 'Opera';
+
+        $device = 'Desktop';
+        if (preg_match('/(tablet|ipad)|(android(?!.*mobi))/i', $user_agent)) { $device = 'Tablet'; } 
+        elseif (preg_match('/mobi/i', $user_agent)) { $device = 'Mobile'; }
+        
+        return ['country' => 'XX', 'os' => $os, 'browser' => $browser, 'device' => $device]; 
+    } 
+}
 if (!function_exists('get_setting')) { function get_setting($key, $conn) { return 'https://' . ($_SERVER['HTTP_HOST'] ?? 'userpanel.clicterra.com'); } }
 
 define('EXTERNAL_CAMPAIGN_ID', -1);
