@@ -1,99 +1,62 @@
 <?php
-// File: /admin/settings.php (NEW)
+// File: /admin/settings.php (FINAL - Corrected DB column names)
+
 require_once __DIR__ . '/init.php';
 
-// Handle form submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $conn->begin_transaction();
-    try {
-        // Update text-based settings
-        $settings_to_update = [
-            'ad_server_domain',
-            'rtb_handler_domain',
-            'min_withdrawal_amount',
-            'payment_methods'
-        ];
-        $stmt = $conn->prepare("UPDATE settings SET setting_value = ? WHERE setting_key = ?");
-        foreach ($settings_to_update as $key) {
-            if (isset($_POST[$key])) {
-                $value = trim($_POST[$key]);
-                $stmt->bind_param("ss", $value, $key);
-                $stmt->execute();
-            }
-        }
-        $stmt->close();
-        
-        // Handle logo upload
-        if (isset($_FILES['site_logo']) && $_FILES['site_logo']['error'] == 0) {
-            $target_dir = __DIR__ . "/assets/img/";
-            if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
-            $filename = "logo." . pathinfo($_FILES['site_logo']['name'], PATHINFO_EXTENSION);
-            move_uploaded_file($_FILES['site_logo']['tmp_name'], $target_dir . $filename);
-            $conn->query("UPDATE settings SET setting_value = 'assets/img/{$filename}' WHERE setting_key = 'site_logo'");
-        }
-
-        // Handle favicon upload
-        if (isset($_FILES['site_favicon']) && $_FILES['site_favicon']['error'] == 0) {
-             $target_dir = __DIR__ . "/assets/img/";
-             $filename = "favicon." . pathinfo($_FILES['site_favicon']['name'], PATHINFO_EXTENSION);
-             move_uploaded_file($_FILES['site_favicon']['tmp_name'], $target_dir . $filename);
-             $conn->query("UPDATE settings SET setting_value = 'assets/img/{$filename}' WHERE setting_key = 'site_favicon'");
-        }
-
-        $conn->commit();
-        $_SESSION['success_message'] = "Settings updated successfully.";
-
-    } catch (Exception $e) {
-        $conn->rollback();
-        $_SESSION['error_message'] = "Error updating settings: " . $e->getMessage();
-    }
-    header("Location: settings.php");
-    exit();
+// Ambil semua pengaturan yang ada dari database
+$settings_result = $conn->query("SELECT setting_key, setting_value FROM settings");
+$settings = [];
+while ($row = $settings_result->fetch_assoc()) {
+    $settings[$row['setting_key']] = $row['setting_value'];
 }
-
-require_once __DIR__ . '/templates/header.php';
 ?>
+
+<?php require_once __DIR__ . '/templates/header.php'; ?>
+
+<?php if (isset($_SESSION['success_message'])): ?>
+<div class="alert alert-success alert-dismissible fade show" role="alert"><i class="bi bi-check-circle-fill"></i> <?php echo $_SESSION['success_message']; ?><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>
+<?php unset($_SESSION['success_message']); endif; ?>
+<?php if (isset($_SESSION['error_message'])): ?>
+<div class="alert alert-danger alert-dismissible fade show" role="alert"><i class="bi bi-exclamation-triangle-fill"></i> <?php echo $_SESSION['error_message']; ?><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>
+<?php unset($_SESSION['error_message']); endif; ?>
 
 <h1 class="mt-4 mb-4">Platform Settings</h1>
 
-<?php if (isset($_SESSION['success_message'])): ?>
-<div class="alert alert-success alert-dismissible fade show" role="alert"><?php echo $_SESSION['success_message']; unset($_SESSION['success_message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
-<?php endif; ?>
-<?php if (isset($_SESSION['error_message'])): ?>
-<div class="alert alert-danger alert-dismissible fade show" role="alert"><?php echo $_SESSION['error_message']; unset($_SESSION['error_message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
-<?php endif; ?>
-
-<form method="POST" action="settings.php" enctype="multipart/form-data">
+<form action="settings-action.php" method="POST" enctype="multipart/form-data">
     <div class="row">
         <div class="col-lg-6">
             <div class="card mb-4">
                 <div class="card-header">Site Branding</div>
                 <div class="card-body">
                     <div class="mb-3">
-                        <label class="form-label">Site Logo</label><br>
-                        <img src="<?php echo htmlspecialchars(get_setting('site_logo', $conn)); ?>" alt="Current Logo" style="max-height: 50px; background: #f0f0f0; padding: 5px; margin-bottom: 10px;">
-                        <input type="file" name="site_logo" class="form-control">
-                        <div class="form-text">Recommended size: 150x40 pixels.</div>
+                        <label for="site_logo" class="form-label">Site Logo</label>
+                        <?php if (!empty($settings['site_logo'])): ?>
+                            <img src="../<?php echo htmlspecialchars($settings['site_logo']); ?>" alt="Current Logo" class="img-thumbnail mb-2" style="max-height: 50px;">
+                        <?php endif; ?>
+                        <input class="form-control" type="file" name="site_logo" id="site_logo">
+                        <small class="form-text">Recommended size: 150x40 pixels.</small>
                     </div>
-                     <div class="mb-3">
-                        <label class="form-label">Site Favicon</label><br>
-                         <img src="<?php echo htmlspecialchars(get_setting('site_favicon', $conn)); ?>" alt="Current Favicon" style="max-height: 32px; margin-bottom: 10px;">
-                        <input type="file" name="site_favicon" class="form-control">
-                        <div class="form-text">Must be a .ico, .png or .gif file.</div>
+                    <div class="mb-3">
+                        <label for="site_favicon" class="form-label">Site Favicon</label>
+                         <?php if (!empty($settings['site_favicon'])): ?>
+                            <img src="../<?php echo htmlspecialchars($settings['site_favicon']); ?>" alt="Current Favicon" class="img-thumbnail mb-2" style="max-height: 32px;">
+                        <?php endif; ?>
+                        <input class="form-control" type="file" name="site_favicon" id="site_favicon">
+                        <small class="form-text">Must be a .ico, .png, or .gif file.</small>
                     </div>
                 </div>
             </div>
-            <div class="card mb-4">
+             <div class="card mb-4">
                 <div class="card-header">Publisher Settings</div>
                 <div class="card-body">
                     <div class="mb-3">
-                        <label class="form-label">Minimum Withdrawal Amount ($)</label>
-                        <input type="number" step="0.01" name="min_withdrawal_amount" class="form-control" value="<?php echo htmlspecialchars(get_setting('min_withdrawal_amount', $conn)); ?>">
+                        <label for="min_withdrawal" class="form-label">Minimum Withdrawal Amount ($)</label>
+                        <input type="number" step="0.01" class="form-control" name="min_withdrawal" id="min_withdrawal" value="<?php echo htmlspecialchars($settings['min_withdrawal'] ?? '10.00'); ?>">
                     </div>
-                     <div class="mb-3">
-                        <label class="form-label">Available Payment Methods</label>
-                        <textarea class="form-control" name="payment_methods" rows="4" placeholder="Satu metode per baris, contoh:&#10;PayPal&#10;Bank Transfer"><?php echo htmlspecialchars(get_setting('payment_methods', $conn)); ?></textarea>
-                        <div class="form-text">One method per line. This will be shown as options to the publisher.</div>
+                    <div class="mb-3">
+                        <label for="payment_methods" class="form-label">Available Payment Methods</label>
+                        <textarea class="form-control" name="payment_methods" id="payment_methods" rows="4"><?php echo htmlspecialchars($settings['payment_methods'] ?? "PayPal\nBank Transfer\nUSDT"); ?></textarea>
+                        <small class="form-text">Enter one payment method per line.</small>
                     </div>
                 </div>
             </div>
@@ -102,22 +65,30 @@ require_once __DIR__ . '/templates/header.php';
             <div class="card mb-4">
                 <div class="card-header">Ad Serving Domains</div>
                 <div class="card-body">
-                    <p class="text-muted">Set domain for Ad Tags and RTB Endpoints. Do not include a trailing slash.</p>
+                    <p class="form-text">Set domain for Ad Tags and RTB Endpoints. Do not include a trailing slash.</p>
                     <div class="mb-3">
-                        <label class="form-label">Ad Tag Domain (for RON)</label>
-                        <input type="url" name="ad_server_domain" class="form-control" placeholder="https://ad.yourdomain.com" value="<?php echo htmlspecialchars(get_setting('ad_server_domain', $conn)); ?>">
-                        <div class="form-text">Example: `&lt;script src="`<strong><?php echo htmlspecialchars(get_setting('ad_server_domain', $conn)); ?></strong>`/ad.php?zone_id=1"&gt;`</div>
+                        <label for="ad_server_domain" class="form-label">Ad Tag & VAST Domain</label>
+                        <input type="url" class="form-control" name="ad_server_domain" id="ad_server_domain" value="<?php echo htmlspecialchars($settings['ad_server_domain'] ?? ''); ?>" placeholder="https://your-ad-server.com">
                     </div>
                      <div class="mb-3">
-                        <label class="form-label">RTB Handler Domain</label>
-                        <input type="url" name="rtb_handler_domain" class="form-control" placeholder="https://rtb.yourdomain.com" value="<?php echo htmlspecialchars(get_setting('rtb_handler_domain', $conn)); ?>">
-                         <div class="form-text">Example: `<strong><?php echo htmlspecialchars(get_setting('rtb_handler_domain', $conn)); ?></strong>/rtb-handler.php?key=...`</div>
+                        <label for="rtb_handler_domain" class="form-label">RTB Handler Domain</label>
+                        <input type="url" class="form-control" name="rtb_handler_domain" id="rtb_handler_domain" value="<?php echo htmlspecialchars($settings['rtb_handler_domain'] ?? ''); ?>" placeholder="https://rtb.your-server.com">
+                    </div>
+                </div>
+            </div>
+            <div class="card mb-4">
+                <div class="card-header">RTB Auction Settings</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="minimum_bid_floor" class="form-label">Minimum Bid Floor ($)</label>
+                        <input type="number" step="0.0001" class="form-control" name="minimum_bid_floor" id="minimum_bid_floor" value="<?php echo htmlspecialchars($settings['minimum_bid_floor'] ?? '0.01'); ?>">
+                        <small class="form-text">The absolute minimum price (CPM) to accept from any demand source.</small>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    <button type="submit" class="btn btn-primary btn-lg">Save All Settings</button>
+    <button type="submit" name="save_settings" class="btn btn-primary">Save All Settings</button>
 </form>
 
 <?php require_once __DIR__ . '/templates/footer.php'; ?>
