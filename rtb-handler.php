@@ -1,26 +1,25 @@
 <?php
-// File: /rtb-handler.php (DEFINITIVE FINAL VERSION - All features and fixes included)
+// File: /rtb-handler.php (DEFINITIVE FINAL - With Dynamic Floor Price Logic)
 
 require_once __DIR__ . '/config/database.php';
 
 // Muat helper-helper penting dengan fallback
 if (file_exists(__DIR__ . '/includes/settings.php')) { require_once __DIR__ . '/includes/settings.php'; }
 if (file_exists(__DIR__ . '/includes/visitor_detector.php')) { require_once __DIR__ . '/includes/visitor_detector.php'; }
-
-// Hanya jalankan pemeriksaan fraud jika ini BUKAN panggilan internal dari ad.php/vast.php
 if (!isset($_GET['internal_call'])) {
     if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
         require_once __DIR__ . '/includes/fraud_detector.php';
-        if (is_fraudulent_request($conn)) {
-            http_response_code(204);
-            $conn->close();
-            exit();
-        }
+        if (is_fraudulent_request($conn)) { http_response_code(204); $conn->close(); exit(); }
     }
 }
-
 if (!function_exists('get_visitor_details')) { function get_visitor_details() { return ['country' => 'XX', 'os' => 'unknown', 'browser' => 'unknown', 'device' => 'unknown']; } }
 if (!function_exists('get_setting')) { function get_setting($key, $conn) { return 'https://' . ($_SERVER['HTTP_HOST'] ?? 'userpanel.clicterra.com'); } }
+
+// Ambil floor price dari database. Jika tidak ada, gunakan default 0.01
+$minimum_bid_floor = (float)get_setting('minimum_bid_floor', $conn);
+if ($minimum_bid_floor <= 0) {
+    $minimum_bid_floor = 0.01;
+}
 
 define('EXTERNAL_CAMPAIGN_ID', -1);
 define('EXTERNAL_CREATIVE_ID', -1);
@@ -63,26 +62,7 @@ $req_size = "{$w}x{$h}";
 // --- LELANG KOMPETITIF PENUH ---
 $best_bid_price = 0; $winning_creative = null; $winning_source = 'none'; $winning_ssp_id = null;
 
-// 1. Lelang Internal (RON)
-$internal_candidate = null;
-if ($is_video_request) {
-    $sql_internal = "SELECT v.*, c.id as campaign_id, c.ad_format_id, v.bid_model, v.bid_amount FROM video_creatives v JOIN campaigns c ON v.campaign_id = c.id WHERE c.status = 'active' AND v.status = 'active' AND c.allow_external_rtb = 1 ORDER BY v.bid_amount DESC, RAND() LIMIT 1";
-    $internal_candidate = $conn->query($sql_internal)->fetch_assoc();
-} else {
-    $sql_internal = "SELECT cr.*, c.id as campaign_id, c.ad_format_id FROM creatives cr JOIN campaigns c ON cr.campaign_id = c.id WHERE c.status = 'active' AND c.allow_external_rtb = 1 AND cr.status = 'active' AND (cr.sizes = ? OR cr.sizes = 'all') ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
-    $stmt_internal = $conn->prepare($sql_internal);
-    $stmt_internal->bind_param("s", $req_size);
-    $stmt_internal->execute();
-    $internal_candidate = $stmt_internal->get_result()->fetch_assoc();
-    $stmt_internal->close();
-}
-if ($internal_candidate) {
-    $best_bid_price = (float)($internal_candidate['bid_amount'] ?? 0);
-    $winning_creative = $internal_candidate;
-    $winning_source = 'internal';
-}
-
-// 2. Lelang Eksternal (SSP)
+// 1. Lelang Eksternal (SSP) untuk Menentukan Harga Pasar
 $endpoint_key = $is_video_request ? 'vast_endpoint_url' : 'endpoint_url';
 $ssp_partners = $conn->query("SELECT id, name, {$endpoint_key} FROM ssp_partners WHERE {$endpoint_key} IS NOT NULL AND {$endpoint_key} != ''")->fetch_all(MYSQLI_ASSOC);
 foreach ($ssp_partners as $ssp) {
@@ -91,7 +71,6 @@ foreach ($ssp_partners as $ssp) {
     curl_setopt_array($ch, [CURLOPT_POST => 1, CURLOPT_POSTFIELDS => $request_body, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_TIMEOUT_MS => 200]);
     $ssp_response_body = curl_exec($ch); $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
     if ($http_code === 200 && !empty($ssp_response_body)) {
-        // error_log("SSP Response from " . $ssp['name'] . ": " . $ssp_response_body);
         $ssp_bid = json_decode($ssp_response_body, true);
         if (json_last_error() === JSON_ERROR_NONE) {
             $ssp_price = $ssp_bid['seatbid'][0]['bid'][0]['price'] ?? 0;
@@ -101,6 +80,30 @@ foreach ($ssp_partners as $ssp) {
             }
         }
     }
+}
+
+// 2. Lelang Internal Melawan Harga Dasar
+$current_floor_price = max($best_bid_price, $minimum_bid_floor);
+$internal_candidate = null;
+
+if ($is_video_request) {
+    $sql_internal = "SELECT v.*, c.id as campaign_id, v.bid_model, v.bid_amount FROM video_creatives v JOIN campaigns c ON v.campaign_id = c.id WHERE c.status = 'active' AND v.status = 'active' AND v.bid_amount > ? ORDER BY v.bid_amount DESC, RAND() LIMIT 1";
+    $stmt_internal = $conn->prepare($sql_internal);
+    $stmt_internal->bind_param("d", $current_floor_price);
+} else {
+    $sql_internal = "SELECT cr.*, c.id as campaign_id FROM creatives cr JOIN campaigns c ON cr.campaign_id = c.id WHERE c.status = 'active' AND cr.status = 'active' AND (cr.sizes = ? OR cr.sizes = 'all') AND cr.bid_amount > ? ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
+    $stmt_internal = $conn->prepare($sql_internal);
+    $stmt_internal->bind_param("sd", $req_size, $current_floor_price);
+}
+$stmt_internal->execute();
+$internal_candidate = $stmt_internal->get_result()->fetch_assoc();
+$stmt_internal->close();
+
+if ($internal_candidate) {
+    $best_bid_price = (float)($internal_candidate['bid_amount'] ?? 0);
+    $winning_creative = $internal_candidate;
+    $winning_source = 'internal';
+    $winning_ssp_id = null;
 }
 
 // --- Pembangunan Respon & Pencatatan Statistik ---
@@ -136,7 +139,7 @@ if ($winning_source !== 'none') {
         $stmt_stats->bind_param("iiisssssd", $cid, $crid, $zone_id_for_log, $visitor_details_for_log['country'], $visitor_details_for_log['os'], $visitor_details_for_log['browser'], $visitor_details_for_log['device'], $today, $cost_for_impression);
     
     } else { // External Winner
-        $cid = $winning_creative['cid'] ?? 'external_campaign'; $crid = $winning_creative['crid'] ?? 'external_creative';
+        $cid = $winning_creative['cid'] ?? 'external'; $crid = $winning_creative['crid'] ?? 'external';
         $adm = $winning_creative['adm'] ?? ''; $adomain = $winning_creative['adomain'] ?? [];
         $cost_for_impression = $best_bid_price / 1000.0;
         $campaign_id_var = EXTERNAL_CAMPAIGN_ID; $creative_id_var = EXTERNAL_CREATIVE_ID;
