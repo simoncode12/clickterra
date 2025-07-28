@@ -1,21 +1,24 @@
 <?php
-// File: /rtb-handler.php (DEFINITIVE FINAL - PATCHED ANTI-DUPLIKAT + Floor Price)
+// rtb-handler.php FINAL PATCH 2025-07-27
 
 require_once __DIR__ . '/config/database.php';
 
-if (file_exists(__DIR__ . '/includes/settings.php')) { require_once __DIR__ . '/includes/settings.php'; }
-if (file_exists(__DIR__ . '/includes/visitor_detector.php')) { require_once __DIR__ . '/includes/visitor_detector.php'; }
-if (!isset($_GET['internal_call'])) {
-    if (file_exists(__DIR__ . '/includes/fraud_detector.php')) {
-        require_once __DIR__ . '/includes/fraud_detector.php';
-        if (is_fraudulent_request($conn)) { http_response_code(204); $conn->close(); exit(); }
-    }
+if (file_exists(__DIR__ . '/includes/settings.php')) require_once __DIR__ . '/includes/settings.php';
+if (file_exists(__DIR__ . '/includes/visitor_detector.php')) require_once __DIR__ . '/includes/visitor_detector.php';
+
+if (!isset($_GET['internal_call']) && file_exists(__DIR__ . '/includes/fraud_detector.php')) {
+    require_once __DIR__ . '/includes/fraud_detector.php';
+    if (is_fraudulent_request($conn)) { http_response_code(204); $conn->close(); exit(); }
 }
-if (!function_exists('get_visitor_details')) { function get_visitor_details() { return ['country' => 'XX', 'os' => 'unknown', 'browser' => 'unknown', 'device' => 'unknown']; } }
-if (!function_exists('get_setting')) { function get_setting($key, $conn) { return 'https://' . ($_SERVER['HTTP_HOST'] ?? 'userpanel.clicterra.com'); } }
+if (!function_exists('get_visitor_details')) {
+    function get_visitor_details() { return ['ip'=>'127.0.0.1','country'=>'XX','os'=>'unknown','browser'=>'unknown','device'=>'unknown','geo_source'=>'default']; }
+}
+if (!function_exists('get_setting')) {
+    function get_setting($key, $conn) { return 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost'); }
+}
 
 $minimum_bid_floor = (float)get_setting('minimum_bid_floor', $conn);
-if ($minimum_bid_floor <= 0) { $minimum_bid_floor = 0.01; }
+if ($minimum_bid_floor <= 0) $minimum_bid_floor = 0.01;
 
 define('EXTERNAL_CAMPAIGN_ID', -1);
 define('EXTERNAL_CREATIVE_ID', -1);
@@ -33,7 +36,6 @@ $site = $bid_request['site'] ?? [];
 $domain_for_log = $site['domain'] ?? 'unknown.com';
 if (json_last_error() !== JSON_ERROR_NONE) { http_response_code(400); exit(json_encode(['id' => $request_id, 'error' => 'Invalid JSON'])); }
 
-// --- Validasi Supply Source & Ambil Revenue Share ---
 $supply_key = $_GET['key'] ?? '';
 $stmt_source = $conn->prepare("SELECT rs.id, rs.user_id, rs.default_zone_id, u.revenue_share FROM rtb_supply_sources rs JOIN users u ON rs.user_id = u.id WHERE rs.supply_key = ? AND rs.status = 'active'");
 $stmt_source->bind_param("s", $supply_key); $stmt_source->execute();
@@ -47,44 +49,49 @@ $supply_source_id_for_log = $supply_source['id'];
 $zone_id_for_log = $supply_source['default_zone_id'];
 if (empty($zone_id_for_log)) { http_response_code(500); exit(json_encode(['id' => $request_id, 'error' => 'Supply source is not configured with a default zone.'])); }
 
-// --- Ekstraksi Parameter Request ---
 $imp = $bid_request['imp'][0] ?? null; $impid = $imp['id'] ?? '1';
 $is_video_request = isset($imp['video']);
+$ad_format = 'banner';
+if (isset($_GET['format'])) $ad_format = strtolower($_GET['format']);
+if (!empty($bid_request['ad_format'])) $ad_format = strtolower($bid_request['ad_format']);
+if (!empty($imp['ext']['ad_format'])) $ad_format = strtolower($imp['ext']['ad_format']);
+
 if ($is_video_request) { $w = $imp['video']['w'] ?? 640; $h = $imp['video']['h'] ?? 480; }
 else { $w = $imp['banner']['w'] ?? 0; $h = $imp['banner']['h'] ?? 0; }
 $req_size = "{$w}x{$h}";
 
-// --- LELANG KOMPETITIF PENUH ---
 $best_bid_price = 0; $winning_creative = null; $winning_source = 'none'; $winning_ssp_id = null;
-
-$endpoint_key = $is_video_request ? 'vast_endpoint_url' : 'endpoint_url';
-$ssp_partners = $conn->query("SELECT id, name, {$endpoint_key} FROM ssp_partners WHERE {$endpoint_key} IS NOT NULL AND {$endpoint_key} != ''")->fetch_all(MYSQLI_ASSOC);
-foreach ($ssp_partners as $ssp) {
-    $ssp_endpoint = $ssp[$endpoint_key];
-    $ch = curl_init($ssp_endpoint);
-    curl_setopt_array($ch, [CURLOPT_POST => 1, CURLOPT_POSTFIELDS => $request_body, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_TIMEOUT_MS => 200]);
-    $ssp_response_body = curl_exec($ch); $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
-    if ($http_code === 200 && !empty($ssp_response_body)) {
-        $ssp_bid = json_decode($ssp_response_body, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
-            $ssp_price = $ssp_bid['seatbid'][0]['bid'][0]['price'] ?? 0;
-            if ($ssp_price > $best_bid_price) {
-                $best_bid_price = $ssp_price; $winning_creative = $ssp_bid['seatbid'][0]['bid'][0];
-                $winning_source = 'external'; $winning_ssp_id = $ssp['id'];
-            }
-        }
-    }
-}
-
 $current_floor_price = max($best_bid_price, $minimum_bid_floor);
-$internal_candidate = null;
 
-if ($is_video_request) {
-    $sql_internal = "SELECT v.*, c.id as campaign_id, v.bid_model, v.bid_amount FROM video_creatives v JOIN campaigns c ON v.campaign_id = c.id WHERE c.status = 'active' AND v.status = 'active' AND v.bid_amount >= ? ORDER BY v.bid_amount DESC, RAND() LIMIT 1";
+if ($ad_format === 'popunder') {
+    $sql_internal = "SELECT cr.*, c.id as campaign_id FROM creatives cr
+        JOIN campaigns c ON cr.campaign_id = c.id
+        WHERE c.status = 'active'
+        AND cr.status = 'active'
+        AND cr.creative_type = 'popunder'
+        AND c.ad_format_id = 4
+        AND cr.bid_amount >= ?
+        ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
+    $stmt_internal = $conn->prepare($sql_internal);
+    $stmt_internal->bind_param("d", $current_floor_price);
+} else if ($is_video_request) {
+    $sql_internal = "SELECT v.*, c.id as campaign_id, v.bid_model, v.bid_amount, v.vast_type, v.video_url, v.duration, v.landing_url, v.name FROM video_creatives v
+        JOIN campaigns c ON v.campaign_id = c.id
+        WHERE c.status = 'active'
+        AND v.status = 'active'
+        AND v.bid_amount >= ?
+        ORDER BY v.bid_amount DESC, RAND() LIMIT 1";
     $stmt_internal = $conn->prepare($sql_internal);
     $stmt_internal->bind_param("d", $current_floor_price);
 } else {
-    $sql_internal = "SELECT cr.*, c.id as campaign_id FROM creatives cr JOIN campaigns c ON cr.campaign_id = c.id WHERE c.status = 'active' AND cr.status = 'active' AND (cr.sizes = ? OR cr.sizes = 'all') AND cr.bid_amount >= ? ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
+    $sql_internal = "SELECT cr.*, c.id as campaign_id FROM creatives cr
+        JOIN campaigns c ON cr.campaign_id = c.id
+        WHERE c.status = 'active'
+        AND cr.status = 'active'
+        AND cr.creative_type != 'popunder'
+        AND (cr.sizes = ? OR cr.sizes = 'all')
+        AND cr.bid_amount >= ?
+        ORDER BY cr.bid_amount DESC, RAND() LIMIT 1";
     $stmt_internal = $conn->prepare($sql_internal);
     $stmt_internal->bind_param("sd", $req_size, $current_floor_price);
 }
@@ -93,98 +100,141 @@ $internal_candidate = $stmt_internal->get_result()->fetch_assoc();
 $stmt_internal->close();
 
 if ($internal_candidate) {
-    if ((float)($internal_candidate['bid_amount'] ?? 0) > $best_bid_price) {
-        $best_bid_price = (float)($internal_candidate['bid_amount'] ?? 0);
-        $winning_creative = $internal_candidate;
-        $winning_source = 'internal';
-        $winning_ssp_id = null;
-    }
+    $best_bid_price = (float)($internal_candidate['bid_amount'] ?? 0);
+    $winning_creative = $internal_candidate;
+    $winning_source = 'internal';
+    $winning_ssp_id = null;
 }
-
-// Ambil IP & UA user (untuk patch anti-duplicate)
-$user_ip    = function_exists('get_real_ip_address') ? get_real_ip_address() : ($_SERVER['REMOTE_ADDR'] ?? '');
-$user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
-$today      = date('Y-m-d');
 
 if ($winning_source !== 'none') {
     $publisher_price = $best_bid_price * ($publisher_revenue_share / 100.0);
     $is_bid_sent_for_log = 1; $price_for_log = $best_bid_price;
-    $adm = ''; $cid = ''; $crid = ''; $adomain = [];
-    
+    $adm = ''; $cid = ''; $crid = ''; $adomain = []; $today = date('Y-m-d');
+
     if ($winning_source === 'internal') {
         $cid = (string)$winning_creative['campaign_id']; $crid = (string)$winning_creative['id'];
         $adomain = !empty($winning_creative['landing_url']) ? [parse_url($winning_creative['landing_url'], PHP_URL_HOST)] : [];
-        $cost_for_impression = ($winning_creative['bid_model'] === 'cpm') ? ($best_bid_price / 1000.0) : 0.0;
+        $cost_for_impression = ($winning_creative['bid_model'] ?? 'cpm') === 'cpm'
+            ? ($best_bid_price / 1000.0) : 0.0;
         $ad_server_domain = get_setting('ad_server_domain', $conn);
-        if ($is_video_request) {
-            ob_start(); echo '<?xml version="1.0" encoding="UTF-8"?>';
-            if ($winning_creative['vast_type'] === 'third_party') {
-                ?><VAST version="2.0"><Ad id="<?php echo $crid; ?>"><Wrapper><AdSystem>Clicterra</AdSystem><VASTAdTagURI><![CDATA[<?php echo htmlspecialchars($winning_creative['video_url']); ?>]]></VASTAdTagURI><Error/><Impression/></Wrapper></Ad></VAST><?php
+
+        if ($ad_format === 'popunder') {
+            // Popunder = ADM is direct URL (NOT JS)
+            $adm = $winning_creative['landing_url'];
+            $w = 0; $h = 0;
+        } else if ($is_video_request) {
+            $vast_type = $winning_creative['vast_type'] ?? '';
+            $video_url = $winning_creative['video_url'] ?? '';
+            $duration = $winning_creative['duration'] ?? 30;
+            $adtitle = $winning_creative['name'] ?? '';
+            $landing_url = $winning_creative['landing_url'] ?? '';
+
+            if ($vast_type === 'third_party') {
+                $adm = '<?xml version="1.0" encoding="UTF-8"?>'
+                    . '<VAST version="3.0">'
+                    . '<Ad id="' . htmlspecialchars($crid) . '">'
+                    . '<Wrapper>'
+                    . '<AdSystem>Clicterra</AdSystem>'
+                    . '<VASTAdTagURI><![CDATA[' . htmlspecialchars($video_url) . ']]></VASTAdTagURI>'
+                    . '<Impression><![CDATA[' . $ad_server_domain . '/track.php?event=impression&cid=' . $crid . ']]></Impression>'
+                    . '<Creatives><Creative><Linear>'
+                    . '<TrackingEvents>'
+                    . '<Tracking event="progress" offset="00:00:05"><![CDATA[' . $ad_server_domain . '/track.php?event=progress&cid=' . $crid . ']]></Tracking>'
+                    . '</TrackingEvents>'
+                    . '<VideoClicks>'
+                    . '<ClickTracking><![CDATA[' . $ad_server_domain . '/click.php?cid=' . $crid . '&zone_id=' . $zone_id_for_log . ']]></ClickTracking>'
+                    . '</VideoClicks>'
+                    . '</Linear></Creative></Creatives>'
+                    . '</Wrapper></Ad></VAST>';
             } else {
-                $video_url = $winning_creative['video_url'];
-                if ($winning_creative['vast_type'] === 'upload' && !filter_var($video_url, FILTER_VALIDATE_URL)) { $video_url = $ad_server_domain . '/admin/' . ltrim($video_url, '/'); }
-                ?><VAST version="2.0"><Ad id="<?php echo $crid; ?>"><InLine><AdSystem>Clicterra</AdSystem><AdTitle><![CDATA[<?php echo htmlspecialchars($winning_creative['name']); ?>]]></AdTitle><Impression><![CDATA[<?php echo "{$ad_server_domain}/track.php?event=impression&cid={$crid}"; ?>]]></Impression><Creatives><Creative><Linear><Duration><?php echo gmdate("H:i:s", $winning_creative['duration']); ?></Duration><VideoClicks><ClickThrough><![CDATA[<?php echo htmlspecialchars($winning_creative['landing_url']); ?>]]></ClickThrough><ClickTracking><![CDATA[<?php echo "{$ad_server_domain}/click.php?cid={$crid}&zone_id={$zone_id_for_log}"; ?>]]></ClickTracking></VideoClicks><MediaFiles><MediaFile delivery="progressive" type="video/mp4" width="640" height="360"><![CDATA[<?php echo htmlspecialchars($video_url); ?>]]></MediaFile></MediaFiles></Linear></Creative></Creatives></InLine></Ad></VAST><?php
+                if (!filter_var($video_url, FILTER_VALIDATE_URL)) {
+                    $video_url = $ad_server_domain . '/admin/' . ltrim($video_url, '/');
+                }
+                $adm = '<?xml version="1.0" encoding="UTF-8"?>'
+                    . '<VAST version="3.0">'
+                    . '<Ad id="' . htmlspecialchars($crid) . '">'
+                    . '<InLine>'
+                    . '<AdSystem>Clicterra</AdSystem>'
+                    . '<AdTitle><![CDATA[' . htmlspecialchars($adtitle) . ']]></AdTitle>'
+                    . '<Impression><![CDATA[' . $ad_server_domain . '/track.php?event=impression&cid=' . $crid . ']]></Impression>'
+                    . '<Creatives><Creative><Linear>'
+                    . '<Duration>' . gmdate("H:i:s", $duration) . '</Duration>'
+                    . '<TrackingEvents>'
+                    . '<Tracking event="progress" offset="00:00:05"><![CDATA[' . $ad_server_domain . '/track.php?event=progress&cid=' . $crid . ']]></Tracking>'
+                    . '</TrackingEvents>'
+                    . '<VideoClicks>'
+                    . '<ClickThrough><![CDATA[' . htmlspecialchars($landing_url) . ']]></ClickThrough>'
+                    . '<ClickTracking><![CDATA[' . $ad_server_domain . '/click.php?cid=' . $crid . '&zone_id=' . $zone_id_for_log . ']]></ClickTracking>'
+                    . '</VideoClicks>'
+                    . '<MediaFiles>'
+                    . '<MediaFile delivery="progressive" type="video/mp4" width="' . $w . '" height="' . $h . '"><![CDATA[' . htmlspecialchars($video_url) . ']]></MediaFile>'
+                    . '</MediaFiles>'
+                    . '</Linear></Creative></Creatives>'
+                    . '</InLine></Ad></VAST>';
             }
-            $adm = ob_get_clean();
         } else {
             $click_url = $ad_server_domain . "/click.php?cid=" . $crid . "&zone_id=" . $zone_id_for_log;
             if ($winning_creative['creative_type'] === 'image' && !empty($winning_creative['landing_url'])) {
                 $image_source = htmlspecialchars($winning_creative['image_url']);
-                if (strpos($image_source, 'uploads/') === 0) { $image_source = $ad_server_domain . "/admin/" . $image_source; }
+                if (strpos($image_source, 'uploads/') === 0) $image_source = $ad_server_domain . "/admin/" . $image_source;
                 $adm = '<a href="' . $click_url . '" target="_blank" rel="noopener"><img src="' . $image_source . '" alt="Ad" border="0" style="width:100%;height:auto;display:block;"></a>';
-            } else { $adm = $winning_creative['script_content']; }
+            } else {
+                $adm = $winning_creative['script_content'];
+            }
         }
 
-        // PATCH ANTI DUPLIKAT MULAI DI SINI
-        $check_stmt = $conn->prepare("SELECT COUNT(*) FROM campaign_stats WHERE campaign_id=? AND creative_id=? AND zone_id=? AND stat_date=? AND user_ip=? AND user_agent=?");
-        $check_stmt->bind_param("iiisss", $cid, $crid, $zone_id_for_log, $today, $user_ip, $user_agent);
-        $check_stmt->execute();
-        $check_stmt->bind_result($exists);
-        $check_stmt->fetch();
-        $check_stmt->close();
-        if ($exists == 0) {
-            $stmt_stats = $conn->prepare("INSERT INTO campaign_stats (campaign_id, creative_id, zone_id, user_ip, user_agent, country, os, browser, device, stat_date, impressions, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE impressions = impressions + 1, cost = cost + VALUES(cost)");
-            $stmt_stats->bind_param("iiisssssssd", $cid, $crid, $zone_id_for_log, $user_ip, $user_agent, $visitor_details_for_log['country'], $visitor_details_for_log['os'], $visitor_details_for_log['browser'], $visitor_details_for_log['device'], $today, $cost_for_impression);
-            $stmt_stats->execute();
-            $stmt_stats->close();
-        }
-        // PATCH ANTI DUPLIKAT SELESAI
+        // --- PATCH ANTI DUPLIKAT IMPRESSION (PER IP+UA+ZONE+CREATIVE+TANGGAL) ---
+        $ip = $visitor_details_for_log['ip'] ?? '127.0.0.1';
+        $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        $check_stmt = $conn->prepare("SELECT 1 FROM campaign_stats WHERE campaign_id=? AND creative_id=? AND zone_id=? AND stat_date=? AND ip=? AND user_agent=? LIMIT 1");
+        $check_stmt->bind_param("iiisss", $cid, $crid, $zone_id_for_log, $today, $ip, $ua);
+        $check_stmt->execute(); $already_exists = $check_stmt->get_result()->fetch_row(); $check_stmt->close();
 
-    } else { // External Winner
-        $cid = $winning_creative['cid'] ?? 'external'; $crid = $winning_creative['crid'] ?? 'external';
-        $adm = $winning_creative['adm'] ?? ''; $adomain = $winning_creative['adomain'] ?? [];
-        $cost_for_impression = $best_bid_price / 1000.0;
-        $campaign_id_var = EXTERNAL_CAMPAIGN_ID; $creative_id_var = EXTERNAL_CREATIVE_ID;
-
-        // PATCH ANTI DUPLIKAT MULAI DI SINI
-        $check_stmt = $conn->prepare("SELECT COUNT(*) FROM campaign_stats WHERE campaign_id=? AND creative_id=? AND zone_id=? AND stat_date=? AND user_ip=? AND user_agent=?");
-        $check_stmt->bind_param("iiisss", $campaign_id_var, $creative_id_var, $zone_id_for_log, $today, $user_ip, $user_agent);
-        $check_stmt->execute();
-        $check_stmt->bind_result($exists);
-        $check_stmt->fetch();
-        $check_stmt->close();
-        if ($exists == 0) {
-            $stmt_stats = $conn->prepare("INSERT INTO campaign_stats (campaign_id, creative_id, zone_id, user_ip, user_agent, ssp_partner_id, country, os, browser, device, stat_date, impressions, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE impressions = impressions + 1, cost = cost + VALUES(cost)");
-            $stmt_stats->bind_param("iiississsssd", $campaign_id_var, $creative_id_var, $zone_id_for_log, $user_ip, $user_agent, $winning_ssp_id, $visitor_details_for_log['country'], $visitor_details_for_log['os'], $visitor_details_for_log['browser'], $visitor_details_for_log['device'], $today, $cost_for_impression);
-            $stmt_stats->execute();
-            $stmt_stats->close();
+        if (!$already_exists) {
+            // Catat impresi unik saja
+            $insert_stmt = $conn->prepare("INSERT INTO campaign_stats (campaign_id, creative_id, zone_id, country, os, browser, device, stat_date, impressions, cost, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?) ON DUPLICATE KEY UPDATE impressions = impressions + 1, cost = cost + VALUES(cost)");
+            $insert_stmt->bind_param(
+                "iiissssssds",
+                $cid, $crid, $zone_id_for_log,
+                $visitor_details_for_log['country'],
+                $visitor_details_for_log['os'],
+                $visitor_details_for_log['browser'],
+                $visitor_details_for_log['device'],
+                $today,
+                $cost_for_impression,
+                $ip,
+                $ua
+            );
+            $insert_stmt->execute(); $insert_stmt->close();
         }
-        // PATCH ANTI DUPLIKAT SELESAI
     }
 
     http_response_code(200);
-    echo json_encode(['id' => $request_id, 'seatbid' => [['bid' => [['id' => uniqid('bid_'), 'impid' => $impid, 'price' => (float)$publisher_price, 'adm' => $adm, 'adomain' => $adomain, 'cid' => $cid, 'crid' => $crid, 'w' => $w, 'h' => $h]], 'seat' => 'clicterra_dps']]]);
-
+    echo json_encode([
+        'id' => $request_id,
+        'seatbid' => [[
+            'bid' => [[
+                'id' => uniqid('bid_'),
+                'impid' => $impid,
+                'price' => (float)$publisher_price,
+                'adm' => $adm,
+                'adomain' => $adomain,
+                'cid' => $cid,
+                'crid' => $crid,
+                'w' => (int)$w,
+                'h' => (int)$h
+            ]],
+            'seat' => 'clicterra_dps'
+        ]]
+    ]);
 } else {
     $is_bid_sent_for_log = 0;
     http_response_code(204);
 }
 
-// === FINAL LOGGING STEP ===
 $stmt_log = $conn->prepare("INSERT INTO rtb_requests (supply_source_id, zone_id, is_bid_sent, winning_price_cpm, country, source_domain) VALUES (?, ?, ?, ?, ?, ?)");
 $stmt_log->bind_param("iiidss", $supply_source_id_for_log, $zone_id_for_log, $is_bid_sent_for_log, $price_for_log, $country_for_log, $domain_for_log);
-$stmt_log->execute();
-$stmt_log->close();
+$stmt_log->execute(); $stmt_log->close();
 
 $conn->close();
 exit();
