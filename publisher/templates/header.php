@@ -1,13 +1,16 @@
 <?php
-// File: /publisher/templates/header.php (REBUILT FOR NEW LAYOUT)
+// File: /publisher/templates/header.php (REDESIGNED FOR MODERN LAYOUT)
 require_once __DIR__ . '/../init.php';
+
+// Get first letter of username for avatar
+$userInitial = strtoupper(substr($_SESSION['publisher_username'] ?? 'U', 0, 1));
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Publisher Portal</title>
+    <title>Publisher Portal - Clicterra</title>
     <?php $favicon_path = get_setting('site_favicon', $conn); ?>
     <?php if ($favicon_path && file_exists(__DIR__ . '/../../' . $favicon_path)): ?>
         <link rel="icon" href="../<?php echo htmlspecialchars($favicon_path); ?>" type="image/x-icon">
@@ -21,18 +24,47 @@ require_once __DIR__ . '/../init.php';
         <?php require_once __DIR__ . '/sidebar.php'; ?>
         <div class="main-content" id="main-content">
             <header class="top-header shadow-sm">
-                <button class="btn btn-light d-lg-none" type="button" id="sidebar-toggle">
+                <button class="header-toggle d-lg-none" id="sidebar-toggle">
                     <i class="bi bi-list"></i>
                 </button>
-                <div class="ms-auto dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown">
-                        <i class="bi bi-person-circle"></i> Welcome, <strong><?php echo htmlspecialchars($_SESSION['publisher_username']); ?></strong>
-                    </a>
-                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="navbarDropdown">
-                        <li><a class="dropdown-item" href="account.php"><i class="bi bi-gear-fill me-2"></i>Account Settings</a></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item text-danger" href="logout.php"><i class="bi bi-box-arrow-right me-2"></i>Logout</a></li>
-                    </ul>
+                
+                <div class="header-actions">
+                    <div class="header-nav-item">
+                        <button class="nav-link" title="Help & Support">
+                            <i class="bi bi-question-circle"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="header-nav-item">
+                        <button class="nav-link" title="Notifications">
+                            <i class="bi bi-bell"></i>
+                            <span class="notification-badge">3</span>
+                        </button>
+                    </div>
+                    
+                    <div class="dropdown">
+                        <div class="user-dropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                            <div class="user-avatar">
+                                <?php echo $userInitial; ?>
+                            </div>
+                            <div class="user-info d-none d-sm-flex">
+                                <span class="user-name"><?php echo htmlspecialchars($_SESSION['publisher_username']); ?></span>
+                                <span class="user-role">Publisher</span>
+                            </div>
+                            <i class="bi bi-chevron-down ms-2 text-muted"></i>
+                        </div>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><span class="dropdown-item-text fw-bold">Hi, <?php echo htmlspecialchars($_SESSION['publisher_username']); ?></span></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="account.php"><i class="bi bi-person"></i> My Profile</a></li>
+                            <li><a class="dropdown-item" href="settings.php"><i class="bi bi-gear"></i> Settings</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="withdraw.php"><i class="bi bi-wallet2"></i> My Wallet</a></li>
+                            <li><a class="dropdown-item" href="support.php"><i class="bi bi-question-circle"></i> Help Center</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item text-danger" href="logout.php"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
+                        </ul>
+                    </div>
                 </div>
             </header>
             <main class="content">
